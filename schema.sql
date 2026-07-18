@@ -50,6 +50,14 @@ CREATE TABLE IF NOT EXISTS conflict_checks (
   checked_at timestamptz DEFAULT now()
 );
 
+-- 6. email_log (notification send history / deduplication)
+CREATE TABLE IF NOT EXISTS email_log (
+  id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  matter_id  uuid        REFERENCES matters (id) ON DELETE CASCADE,
+  email_type text        NOT NULL,
+  sent_at    timestamptz DEFAULT now()
+);
+
 -- =============================================================
 -- Row Level Security — enable on all tables, then add a
 -- permissive policy for authenticated users (to be tightened).
@@ -60,6 +68,7 @@ ALTER TABLE matters          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE intake_forms     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conflict_checks  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_log        ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Authenticated users full access on clients"
   ON clients FOR ALL
@@ -87,6 +96,12 @@ CREATE POLICY "Authenticated users full access on documents"
 
 CREATE POLICY "Authenticated users full access on conflict_checks"
   ON conflict_checks FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
+
+CREATE POLICY "Authenticated users full access on email_log"
+  ON email_log FOR ALL
   TO authenticated
   USING (true)
   WITH CHECK (true);

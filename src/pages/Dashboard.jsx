@@ -51,29 +51,31 @@ export default function Dashboard({ session }) {
       ) : matters.length === 0 ? (
         <p className="dash-empty">No matters found.</p>
       ) : (
-        <table className="dash-table">
-          <thead>
-            <tr>
-              <th>Client</th>
-              <th>Email</th>
-              <th>Matter Type</th>
-              <th>Status</th>
-              <th>E-sign</th>
-              <th>Created</th>
-            </tr>
-          </thead>
-          <tbody>
-            {matters.map((m) => (
-              <MatterRow
-                key={m.id}
-                matter={m}
-                isOpen={selectedId === m.id}
-                onToggle={() => setSelectedId(selectedId === m.id ? null : m.id)}
-                session={session}
-              />
-            ))}
-          </tbody>
-        </table>
+        <div className="dash-table-wrap">
+          <table className="dash-table">
+            <thead>
+              <tr>
+                <th>Client</th>
+                <th>Email</th>
+                <th>Matter Type</th>
+                <th>Status</th>
+                <th>E-sign</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {matters.map((m) => (
+                <MatterRow
+                  key={m.id}
+                  matter={m}
+                  isOpen={selectedId === m.id}
+                  onToggle={() => setSelectedId(selectedId === m.id ? null : m.id)}
+                  session={session}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   )
@@ -117,11 +119,13 @@ function MatterDetail({ matter, userEmail }) {
   const [esignStatus, setEsignStatus] = useState(matter.esign_status || 'not_sent')
   const [esignRef, setEsignRef] = useState(matter.esign_reference || null)
   const [loading, setLoading] = useState(true)
+  const [detailError, setDetailError] = useState(null)
 
-  useEffect(() => {
-    let cancelled = false
+  async function loadDetail() {
+    setLoading(true)
+    setDetailError(null)
 
-    async function load() {
+    try {
       const [intakeRes, docsRes, conflictRes] = await Promise.all([
         supabase
           .from('intake_forms')
@@ -144,19 +148,32 @@ function MatterDetail({ matter, userEmail }) {
           .maybeSingle(),
       ])
 
-      if (cancelled) return
-
       if (intakeRes.data) setIntakeData(intakeRes.data)
       if (conflictRes.data) setConflictCheck(conflictRes.data)
       setDocs(docsRes.data || [])
+    } catch (err) {
+      setDetailError(err.message || 'Failed to load matter details')
+    } finally {
       setLoading(false)
     }
+  }
 
-    load()
-    return () => { cancelled = true }
+  useEffect(() => {
+    loadDetail()
   }, [matterId])
 
   if (loading) return <p className="dash-detail-loading">Loading details…</p>
+
+  if (detailError) {
+    return (
+      <div className="dash-detail-error">
+        <p>{detailError}</p>
+        <button type="button" className="esign-refresh-btn" onClick={loadDetail}>
+          Retry
+        </button>
+      </div>
+    )
+  }
 
   const canSendLetter = conflictCheck?.result === 'Clear' && esignStatus === 'not_sent'
 
@@ -242,6 +259,9 @@ function MatterDetail({ matter, userEmail }) {
           <ConflictCheckForm
             matterId={matterId}
             userEmail={userEmail}
+            clientName={client.name || ''}
+            clientEmail={client.email || ''}
+            matterType={matter.matter_type || ''}
             onSaved={setConflictCheck}
           />
         )}
@@ -263,6 +283,9 @@ function MatterDetail({ matter, userEmail }) {
               <RefreshStatusButton
                 matterId={matterId}
                 signatureRequestId={esignRef}
+                clientName={client.name || ''}
+                clientEmail={client.email || ''}
+                matterType={matter.matter_type || ''}
                 onStatusUpdate={(newStatus) => {
                   setEsignStatus(newStatus)
                 }}
@@ -310,7 +333,7 @@ function esignBadgeClass(status) {
 
 const CONFLICT_RESULTS = ['Clear', 'Conflict found', 'Needs review']
 
-function ConflictCheckForm({ matterId, userEmail, onSaved }) {
+function ConflictCheckForm({ matterId, userEmail, clientName, clientEmail, matterType, onSaved }) {
   const [checkedBy, setCheckedBy] = useState(userEmail)
   const [result, setResult] = useState('Clear')
   const [notes, setNotes] = useState('')
@@ -337,6 +360,18 @@ function ConflictCheckForm({ matterId, userEmail, onSaved }) {
       setError(err.message)
       setSaving(false)
       return
+    }
+
+    if (result === 'Clear' && clientEmail) {
+      supabase.functions.invoke('send-notification-email', {
+        body: {
+          matter_id: matterId,
+          email_type: 'conflict_clear',
+          recipient_email: clientEmail,
+          recipient_name: clientName,
+          matter_type: matterType,
+        },
+      }).catch(() => {})
     }
 
     onSaved(data)
@@ -409,7 +444,13 @@ function EngagementLetterButton({ matterId, clientName, clientEmail, matterType,
     )
 
     if (fnErr) {
-      setError(fnErr.message || 'Failed to send engagement letter')
+      // FunctionsHttpError hides the function's response body; read it to show the real reason
+      let message = fnErr.message || 'Failed to send engagement letter'
+      try {
+        const body = await fnErr.context.json()
+        if (body?.error) message = body.error
+      } catch { /* keep generic message */ }
+      setError(message)
       setSending(false)
       return
     }
@@ -441,7 +482,14 @@ function EngagementLetterButton({ matterId, clientName, clientEmail, matterType,
   )
 }
 
-function RefreshStatusButton({ matterId, signatureRequestId, onStatusUpdate }) {
+function RefreshStatusButton({
+  matterId,
+  signatureRequestId,
+  clientName,
+  clientEmail,
+  matterType,
+  onStatusUpdate,
+}) {
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState(null)
 
@@ -469,6 +517,18 @@ function RefreshStatusButton({ matterId, signatureRequestId, onStatusUpdate }) {
       setError(data.error)
       setChecking(false)
       return
+    }
+
+    if (data.esign_status === 'signed' && clientEmail) {
+      supabase.functions.invoke('send-notification-email', {
+        body: {
+          matter_id: matterId,
+          email_type: 'engagement_signed',
+          recipient_email: clientEmail,
+          recipient_name: clientName,
+          matter_type: matterType,
+        },
+      }).catch(() => {})
     }
 
     onStatusUpdate(data.esign_status)
