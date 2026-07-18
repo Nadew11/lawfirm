@@ -58,6 +58,7 @@ export default function Dashboard({ session }) {
               <th>Email</th>
               <th>Matter Type</th>
               <th>Status</th>
+              <th>E-sign</th>
               <th>Created</th>
             </tr>
           </thead>
@@ -89,11 +90,12 @@ function MatterRow({ matter, isOpen, onToggle, session }) {
         <td>{client.email || '—'}</td>
         <td>{matter.matter_type || '—'}</td>
         <td><span className="dash-status">{matter.status}</span></td>
+        <td><span className={`esign-badge ${esignBadgeClass(matter.esign_status)}`}>{matter.esign_status || 'not_sent'}</span></td>
         <td>{created}</td>
       </tr>
       {isOpen && (
         <tr className="dash-detail-row">
-          <td colSpan={5}>
+          <td colSpan={6}>
             <MatterDetail
               matter={matter}
               userEmail={session?.user?.email || ''}
@@ -247,9 +249,25 @@ function MatterDetail({ matter, userEmail }) {
 
       <div className="dash-detail-section">
         <h3>Engagement Letter</h3>
-        {esignStatus === 'sent' ? (
+        {esignStatus === 'signed' ? (
           <div className="esign-sent-display">
-            <span className="conflict-result-badge badge-clear">Sent</span>
+            <span className="esign-badge esign-signed">Signed</span>
+            <p className="dash-meta">
+              Signature request: <code>{esignRef}</code>
+            </p>
+          </div>
+        ) : esignStatus === 'sent' ? (
+          <div className="esign-sent-display">
+            <div className="esign-status-row">
+              <span className="esign-badge esign-sent">Sent</span>
+              <RefreshStatusButton
+                matterId={matterId}
+                signatureRequestId={esignRef}
+                onStatusUpdate={(newStatus) => {
+                  setEsignStatus(newStatus)
+                }}
+              />
+            </div>
             <p className="dash-meta">
               Signature request: <code>{esignRef}</code>
             </p>
@@ -282,6 +300,12 @@ function badgeClass(result) {
   if (result === 'Clear') return 'badge-clear'
   if (result === 'Conflict found') return 'badge-conflict'
   return 'badge-review'
+}
+
+function esignBadgeClass(status) {
+  if (status === 'signed') return 'esign-signed'
+  if (status === 'sent') return 'esign-sent'
+  return 'esign-not-sent'
 }
 
 const CONFLICT_RESULTS = ['Clear', 'Conflict found', 'Needs review']
@@ -414,5 +438,54 @@ function EngagementLetterButton({ matterId, clientName, clientEmail, matterType,
         {sending ? 'Sending…' : 'Send engagement letter'}
       </button>
     </div>
+  )
+}
+
+function RefreshStatusButton({ matterId, signatureRequestId, onStatusUpdate }) {
+  const [checking, setChecking] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function handleRefresh() {
+    setChecking(true)
+    setError(null)
+
+    const { data, error: fnErr } = await supabase.functions.invoke(
+      'check-esign-status',
+      {
+        body: {
+          signature_request_id: signatureRequestId,
+          matter_id: matterId,
+        },
+      },
+    )
+
+    if (fnErr) {
+      setError(fnErr.message || 'Failed to check status')
+      setChecking(false)
+      return
+    }
+
+    if (data?.error) {
+      setError(data.error)
+      setChecking(false)
+      return
+    }
+
+    onStatusUpdate(data.esign_status)
+    setChecking(false)
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        className="esign-refresh-btn"
+        onClick={handleRefresh}
+        disabled={checking}
+      >
+        {checking ? 'Checking…' : 'Refresh status'}
+      </button>
+      {error && <span className="esign-refresh-error">{error}</span>}
+    </>
   )
 }
