@@ -156,6 +156,8 @@ function MatterDetail({ matter, userEmail }) {
 
   if (loading) return <p className="dash-detail-loading">Loading details…</p>
 
+  const canSendLetter = conflictCheck?.result === 'Clear' && esignStatus === 'not_sent'
+
   async function openDocument(doc) {
     const marker = '/client-documents/'
     const markerIndex = doc.file_url?.indexOf(marker) ?? -1
