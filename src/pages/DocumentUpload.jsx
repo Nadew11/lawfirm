@@ -35,15 +35,9 @@ export default function DocumentUpload({ matterId, supabase }) {
 
       if (storageErr) throw storageErr
 
-      const { data: urlData } = supabase.storage
-        .from('client-documents')
-        .getPublicUrl(path)
-
-      const fileUrl = urlData.publicUrl
-
       const { error: docErr } = await supabase.from('documents').insert({
         matter_id: matterId,
-        file_url: fileUrl,
+        file_url: path,
         doc_type: entry.docType,
       })
 
