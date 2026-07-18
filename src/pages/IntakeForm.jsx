@@ -61,6 +61,16 @@ export default function IntakeForm() {
 
       setMatterId(newMatterId)
       setSubmitted(true)
+
+      supabase.functions.invoke('send-notification-email', {
+        body: {
+          matter_id: newMatterId,
+          email_type: 'intake_confirmation',
+          recipient_email: form.email.trim(),
+          recipient_name: form.name.trim(),
+          matter_type: form.matterType,
+        },
+      }).catch(() => {})
     } catch (err) {
       setSubmitError(err.message || 'Something went wrong. Please try again.')
     } finally {

@@ -232,3 +232,19 @@ select.intake-input {
 .upload-done-btn:hover {
   border-color: var(--accent);
 }
+
+@media (max-width: 500px) {
+  .upload-add-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .upload-type-select {
+    width: 100%;
+  }
+
+  .upload-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
