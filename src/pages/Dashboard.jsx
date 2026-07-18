@@ -16,7 +16,7 @@ export default function Dashboard({ session }) {
     setLoading(true)
     const { data, error: err } = await supabase
       .from('matters')
-      .select('id, matter_type, status, created_at, clients(name, email)')
+      .select('id, matter_type, status, esign_status, esign_reference, created_at, clients(name, email)')
       .order('created_at', { ascending: false })
 
     if (err) {
@@ -94,7 +94,10 @@ function MatterRow({ matter, isOpen, onToggle, session }) {
       {isOpen && (
         <tr className="dash-detail-row">
           <td colSpan={5}>
-            <MatterDetail matterId={matter.id} userEmail={session?.user?.email || ''} />
+            <MatterDetail
+              matter={matter}
+              userEmail={session?.user?.email || ''}
+            />
           </td>
         </tr>
       )}
@@ -102,10 +105,15 @@ function MatterRow({ matter, isOpen, onToggle, session }) {
   )
 }
 
-function MatterDetail({ matterId, userEmail }) {
+function MatterDetail({ matter, userEmail }) {
+  const matterId = matter.id
+  const client = matter.clients || {}
+
   const [intakeData, setIntakeData] = useState(null)
   const [docs, setDocs] = useState([])
   const [conflictCheck, setConflictCheck] = useState(null)
+  const [esignStatus, setEsignStatus] = useState(matter.esign_status || 'not_sent')
+  const [esignRef, setEsignRef] = useState(matter.esign_reference || null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -147,6 +155,8 @@ function MatterDetail({ matterId, userEmail }) {
   }, [matterId])
 
   if (loading) return <p className="dash-detail-loading">Loading details…</p>
+
+  const canSendLetter = conflictCheck?.result === 'Clear' && esignStatus === 'not_sent'
 
   return (
     <div className="dash-detail">
@@ -213,6 +223,36 @@ function MatterDetail({ matterId, userEmail }) {
             userEmail={userEmail}
             onSaved={setConflictCheck}
           />
+        )}
+      </div>
+
+      <div className="dash-detail-section">
+        <h3>Engagement Letter</h3>
+        {esignStatus === 'sent' ? (
+          <div className="esign-sent-display">
+            <span className="conflict-result-badge badge-clear">Sent</span>
+            <p className="dash-meta">
+              Signature request: <code>{esignRef}</code>
+            </p>
+          </div>
+        ) : canSendLetter ? (
+          <EngagementLetterButton
+            matterId={matterId}
+            clientName={client.name || ''}
+            clientEmail={client.email || ''}
+            matterType={matter.matter_type || ''}
+            attorneyEmail={userEmail}
+            onSent={(refId) => {
+              setEsignStatus('sent')
+              setEsignRef(refId)
+            }}
+          />
+        ) : (
+          <p className="dash-empty">
+            {conflictCheck
+              ? 'Conflict check must be "Clear" to send an engagement letter.'
+              : 'Complete a conflict check first.'}
+          </p>
         )}
       </div>
     </div>
@@ -301,5 +341,59 @@ function ConflictCheckForm({ matterId, userEmail, onSaved }) {
         {saving ? 'Saving…' : 'Save conflict check'}
       </button>
     </form>
+  )
+}
+
+function EngagementLetterButton({ matterId, clientName, clientEmail, matterType, attorneyEmail, onSent }) {
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function handleSend() {
+    setSending(true)
+    setError(null)
+
+    const { data, error: fnErr } = await supabase.functions.invoke(
+      'send-engagement-letter',
+      {
+        body: {
+          matter_id: matterId,
+          client_name: clientName,
+          client_email: clientEmail,
+          matter_type: matterType,
+          attorney_name: attorneyEmail,
+        },
+      },
+    )
+
+    if (fnErr) {
+      setError(fnErr.message || 'Failed to send engagement letter')
+      setSending(false)
+      return
+    }
+
+    if (data?.error) {
+      setError(data.error)
+      setSending(false)
+      return
+    }
+
+    onSent(data.signature_request_id)
+  }
+
+  return (
+    <div className="esign-section">
+      <p className="esign-description">
+        Send an engagement letter to <strong>{clientName}</strong> ({clientEmail}) for signing via Dropbox Sign.
+      </p>
+      {error && <div className="dash-error">{error}</div>}
+      <button
+        type="button"
+        className="esign-send-btn"
+        onClick={handleSend}
+        disabled={sending}
+      >
+        {sending ? 'Sending…' : 'Send engagement letter'}
+      </button>
+    </div>
   )
 }

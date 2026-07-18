@@ -14,11 +14,13 @@ CREATE TABLE IF NOT EXISTS clients (
 
 -- 2. matters
 CREATE TABLE IF NOT EXISTS matters (
-  id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id   uuid        REFERENCES clients (id) ON DELETE CASCADE,
-  matter_type text,
-  status      text        DEFAULT 'intake_pending',
-  created_at  timestamptz DEFAULT now()
+  id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id       uuid        REFERENCES clients (id) ON DELETE CASCADE,
+  matter_type     text,
+  status          text        DEFAULT 'intake_pending',
+  esign_status    text        DEFAULT 'not_sent',
+  esign_reference text,
+  created_at      timestamptz DEFAULT now()
 );
 
 -- 3. intake_forms

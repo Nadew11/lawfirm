@@ -304,6 +304,57 @@
   cursor: not-allowed;
 }
 
+/* Engagement letter / e-sign */
+
+.esign-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.esign-description {
+  font-size: 14px;
+  color: var(--text);
+  margin: 0;
+}
+
+.esign-send-btn {
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 5px;
+  background: #276749;
+  color: #fff;
+  cursor: pointer;
+  align-self: flex-start;
+  transition: opacity 0.2s;
+}
+
+.esign-send-btn:hover {
+  opacity: 0.9;
+}
+
+.esign-send-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.esign-sent-display {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.esign-sent-display code {
+  font-size: 12px;
+  background: var(--code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  word-break: break-all;
+}
+
 @media (max-width: 700px) {
   .dash-table th:nth-child(2),
   .dash-table td:nth-child(2) {
