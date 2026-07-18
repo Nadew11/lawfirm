@@ -444,7 +444,13 @@ function EngagementLetterButton({ matterId, clientName, clientEmail, matterType,
     )
 
     if (fnErr) {
-      setError(fnErr.message || 'Failed to send engagement letter')
+      // FunctionsHttpError hides the function's response body; read it to show the real reason
+      let message = fnErr.message || 'Failed to send engagement letter'
+      try {
+        const body = await fnErr.context.json()
+        if (body?.error) message = body.error
+      } catch { /* keep generic message */ }
+      setError(message)
       setSending(false)
       return
     }
