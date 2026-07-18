@@ -156,7 +156,24 @@ function MatterDetail({ matter, userEmail }) {
 
   if (loading) return <p className="dash-detail-loading">Loading details…</p>
 
-  const canSendLetter = conflictCheck?.result === 'Clear' && esignStatus === 'not_sent'
+  async function openDocument(doc) {
+    const marker = '/client-documents/'
+    const markerIndex = doc.file_url?.indexOf(marker) ?? -1
+    const storagePath = markerIndex >= 0
+      ? decodeURIComponent(doc.file_url.slice(markerIndex + marker.length))
+      : doc.file_url
+
+    const { data, error } = await supabase.storage
+      .from('client-documents')
+      .createSignedUrl(storagePath, 60)
+
+    if (error) {
+      window.alert(`Could not open document: ${error.message}`)
+      return
+    }
+
+    window.open(data.signedUrl, '_blank', 'noopener,noreferrer')
+  }
 
   return (
     <div className="dash-detail">
@@ -189,9 +206,9 @@ function MatterDetail({ matter, userEmail }) {
               const fileName = d.file_url?.split('/').pop() || 'file'
               return (
                 <li key={d.id} className="dash-doc-item">
-                  <a href={d.file_url} target="_blank" rel="noopener noreferrer">
+                  <button type="button" className="dash-doc-link" onClick={() => openDocument(d)}>
                     {decodeURIComponent(fileName)}
-                  </a>
+                  </button>
                   <span className="dash-doc-type">{d.doc_type}</span>
                 </li>
               )

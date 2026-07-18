@@ -49,38 +49,17 @@ export default function IntakeForm() {
     setSubmitting(true)
 
     try {
-      const { data: client, error: clientErr } = await supabase
-        .from('clients')
-        .insert({ name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim() || null })
-        .select('id')
-        .single()
-
-      if (clientErr) throw clientErr
-
-      const { data: matter, error: matterErr } = await supabase
-        .from('matters')
-        .insert({ client_id: client.id, matter_type: form.matterType })
-        .select('id')
-        .single()
-
-      if (matterErr) throw matterErr
-
-      const { error: intakeErr } = await supabase
-        .from('intake_forms')
-        .insert({
-          matter_id: matter.id,
-          form_data: {
-            name: form.name.trim(),
-            email: form.email.trim(),
-            phone: form.phone.trim(),
-            matterType: form.matterType,
-            description: form.description.trim(),
-          },
-        })
+      const { data: newMatterId, error: intakeErr } = await supabase.rpc('submit_intake', {
+        client_name: form.name.trim(),
+        client_email: form.email.trim(),
+        client_phone: form.phone.trim() || null,
+        selected_matter_type: form.matterType,
+        matter_description: form.description.trim() || null,
+      })
 
       if (intakeErr) throw intakeErr
 
-      setMatterId(matter.id)
+      setMatterId(newMatterId)
       setSubmitted(true)
     } catch (err) {
       setSubmitError(err.message || 'Something went wrong. Please try again.')
