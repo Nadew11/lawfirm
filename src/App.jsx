@@ -3,6 +3,7 @@ import { supabase } from './lib/supabaseClient'
 import IntakeForm from './pages/IntakeForm'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
+import LandingPage from './pages/LandingPage'
 
 function getHash() {
   return window.location.hash.replace('#', '') || ''
@@ -40,6 +41,10 @@ function App() {
     return <Login />
   }
 
+  if (page === 'intake') {
+    return <IntakeForm />
+  }
+
   if (page === 'dashboard') {
     if (!authReady) return null
     if (!session) {
@@ -49,7 +54,7 @@ function App() {
     return <Dashboard session={session} />
   }
 
-  return <IntakeForm />
+  return <LandingPage />
 }
 
 export default App
