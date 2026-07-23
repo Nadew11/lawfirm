@@ -77,6 +77,7 @@ export default function IntakeForm() {
     setSubmitting(true)
     try {
       const { data: newMatterId, error: intakeErr } = await supabase.rpc('submit_intake', {
+        target_firm_id: import.meta.env.VITE_FIRM_ID,
         client_name: form.name.trim(),
         client_email: form.email.trim(),
         client_phone: form.phone.trim() || null,
