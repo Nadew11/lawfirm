@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
+import { logAudit } from '../lib/auditLog'
 import './Dashboard.css'
 
 const MATTER_FILTERS = ['All matters', 'New intake', 'Needs conflict check', 'Awaiting signature', 'Signed']
@@ -39,7 +40,10 @@ export default function Dashboard({ session }) {
       .order('created_at', { ascending: false })
 
     if (err) setError(err.message)
-    else setMatters(data || [])
+    else {
+      setMatters(data || [])
+      logAudit('SELECT', 'matters', null, { count: data?.length || 0 })
+    }
     setLoading(false)
   }, [])
 
@@ -229,6 +233,7 @@ function MatterDetail({ matter, userEmail, onClose, onMatterUpdate }) {
       setIntakeData(intakeRes.data || null)
       setDocs(docsRes.data || [])
       setConflictCheck(conflictRes.data || null)
+      logAudit('SELECT', 'matters', matterId, { tabs: ['intake_forms', 'documents', 'conflict_checks'] })
     }
     setLoading(false)
   }, [matterId])
