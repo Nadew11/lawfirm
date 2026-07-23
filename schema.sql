@@ -58,6 +58,21 @@ CREATE TABLE IF NOT EXISTS email_log (
   sent_at    timestamptz DEFAULT now()
 );
 
+-- 7. consultations (Calendly invitation and booking status)
+CREATE TABLE IF NOT EXISTS consultations (
+  id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  matter_id      uuid        UNIQUE NOT NULL REFERENCES matters (id) ON DELETE CASCADE,
+  provider       text        NOT NULL DEFAULT 'calendly',
+  status         text        NOT NULL DEFAULT 'not_invited'
+                               CHECK (status IN ('not_invited', 'invited', 'scheduled', 'cancelled', 'completed', 'no_show')),
+  booking_url    text,
+  attorney_email text,
+  invited_at     timestamptz,
+  scheduled_at   timestamptz,
+  created_at     timestamptz DEFAULT now(),
+  updated_at     timestamptz DEFAULT now()
+);
+
 -- =============================================================
 -- Row Level Security — enable on all tables, then add a
 -- permissive policy for authenticated users (to be tightened).
@@ -69,6 +84,7 @@ ALTER TABLE intake_forms     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE documents        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conflict_checks  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE email_log        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE consultations    ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Authenticated users full access on clients"
   ON clients FOR ALL
@@ -102,6 +118,12 @@ CREATE POLICY "Authenticated users full access on conflict_checks"
 
 CREATE POLICY "Authenticated users full access on email_log"
   ON email_log FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
+
+CREATE POLICY "Authenticated users full access on consultations"
+  ON consultations FOR ALL
   TO authenticated
   USING (true)
   WITH CHECK (true);

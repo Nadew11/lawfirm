@@ -37,7 +37,7 @@
   width: 47px; height: 47px; display: grid; place-items: center; position: relative; 
   border: 3px solid var(--ink); font-family: 'Libre Caslon Display', serif; font-size: 19px;
 }
-.landing-monogram span { color: var(--brass); margin-left: -2px; margin-bottom: -4px; }
+.landing-monogram span { color: var(--brass); margin-left: -2px;}
 .landing-brand-copy { display: flex; flex-direction: column; line-height: 1; }
 .landing-brand-copy strong { font-family: 'Libre Caslon Display', serif; font-size: 21px; font-weight: 400; letter-spacing: .02em; }
 .landing-brand-copy small { margin-top: 7px; color: var(--sage); font-size: 9px; font-weight: 600; letter-spacing: .22em; text-transform: uppercase; }

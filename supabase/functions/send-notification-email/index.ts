@@ -1,19 +1,26 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const POSTMARK_SERVER_TOKEN =
-  Deno.env.get("POSTMARK_SERVER_TOKEN") ??
-  "fa7edd94-5dc2-49f3-b07e-52132ff16bb9";
+const POSTMARK_SERVER_TOKEN = Deno.env.get("POSTMARK_SERVER_TOKEN") ?? "";
 const POSTMARK_FROM = "naodasfaw22@augustana.edu";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
-const VALID_TYPES = ["intake_confirmation", "conflict_clear", "engagement_signed"] as const;
+const VALID_TYPES = ["intake_confirmation", "conflict_clear", "consultation_invite", "engagement_signed"] as const;
 type EmailType = (typeof VALID_TYPES)[number];
 
-function buildEmail(emailType: EmailType, recipientName: string, matterType: string) {
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;",
+  })[character] ?? character);
+}
+
+function buildEmail(emailType: EmailType, recipientName: string, matterType: string, schedulingUrl = "") {
   const name = recipientName || "Client";
   const typeLabel = matterType || "your matter";
+  const safeName = escapeHtml(name);
+  const safeTypeLabel = escapeHtml(typeLabel);
+  const safeSchedulingUrl = escapeHtml(schedulingUrl);
 
   if (emailType === "intake_confirmation") {
     return {
@@ -23,8 +30,8 @@ function buildEmail(emailType: EmailType, recipientName: string, matterType: str
         `We received your submission for ${typeLabel}. An attorney will review it shortly.\n\n` +
         `Thank you.`,
       htmlBody:
-        `<p>Dear ${name},</p>` +
-        `<p>We received your submission for <strong>${typeLabel}</strong>. An attorney will review it shortly.</p>` +
+        `<p>Dear ${safeName},</p>` +
+        `<p>We received your submission for <strong>${safeTypeLabel}</strong>. An attorney will review it shortly.</p>` +
         `<p>Thank you.</p>`,
     };
   }
@@ -37,8 +44,25 @@ function buildEmail(emailType: EmailType, recipientName: string, matterType: str
         `Your matter is moving forward.\n\n` +
         `Thank you.`,
       htmlBody:
-        `<p>Dear ${name},</p>` +
+        `<p>Dear ${safeName},</p>` +
         `<p>Your matter is moving forward.</p>` +
+        `<p>Thank you.</p>`,
+    };
+  }
+
+  if (emailType === "consultation_invite") {
+    return {
+      subject: "Choose a time for your legal consultation",
+      textBody:
+        `Dear ${name},\n\n` +
+        `Our team is ready to schedule an initial consultation regarding ${typeLabel}. ` +
+        `Choose a convenient time using this secure scheduling page:\n\n${schedulingUrl}\n\n` +
+        `Scheduling a consultation does not by itself create an attorney-client relationship.\n\nThank you.`,
+      htmlBody:
+        `<p>Dear ${safeName},</p>` +
+        `<p>Our team is ready to schedule an initial consultation regarding <strong>${safeTypeLabel}</strong>.</p>` +
+        `<p><a href="${safeSchedulingUrl}" style="display:inline-block;padding:12px 20px;background:#102126;color:#ffffff;text-decoration:none;">Choose a consultation time</a></p>` +
+        `<p>Scheduling a consultation does not by itself create an attorney-client relationship.</p>` +
         `<p>Thank you.</p>`,
     };
   }
@@ -50,7 +74,7 @@ function buildEmail(emailType: EmailType, recipientName: string, matterType: str
       `Your engagement letter has been signed and your matter is now active.\n\n` +
       `Thank you.`,
     htmlBody:
-      `<p>Dear ${name},</p>` +
+      `<p>Dear ${safeName},</p>` +
       `<p>Your engagement letter has been signed and your matter is now active.</p>` +
       `<p>Thank you.</p>`,
   };
@@ -85,6 +109,7 @@ Deno.serve(async (req: Request) => {
       recipient_email,
       recipient_name,
       matter_type,
+      scheduling_url,
     } = await req.json();
 
     if (!matter_id || !email_type || !recipient_email) {
@@ -93,6 +118,15 @@ Deno.serve(async (req: Request) => {
 
     if (!VALID_TYPES.includes(email_type)) {
       return jsonResponse({ error: "Invalid email_type" }, 400);
+    }
+
+    if (email_type === "consultation_invite") {
+      try {
+        const url = new URL(scheduling_url);
+        if (url.protocol !== "https:" || !url.hostname.endsWith("calendly.com")) throw new Error();
+      } catch {
+        return jsonResponse({ error: "A valid Calendly scheduling URL is required" }, 400);
+      }
     }
 
     if (!POSTMARK_SERVER_TOKEN) {
@@ -109,7 +143,7 @@ Deno.serve(async (req: Request) => {
       .limit(1)
       .maybeSingle();
 
-    if (existing) {
+    if (existing && email_type !== "consultation_invite") {
       return jsonResponse({ already_sent: true });
     }
 
@@ -117,6 +151,7 @@ Deno.serve(async (req: Request) => {
       email_type as EmailType,
       recipient_name || "",
       matter_type || "",
+      scheduling_url || "",
     );
 
     const pmRes = await fetch("https://api.postmarkapp.com/email", {

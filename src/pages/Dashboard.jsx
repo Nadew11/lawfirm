@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import './Dashboard.css'
 
-const MATTER_FILTERS = ['All matters', 'New intake', 'Needs conflict check', 'Awaiting signature', 'Signed']
+const MATTER_FILTERS = ['All matters', 'New intake', 'Needs conflict check', 'Consultation invited', 'Consultation scheduled', 'Awaiting signature', 'Signed']
+const CALENDLY_URL = import.meta.env.VITE_CALENDLY_URL
 
 function Icon({ name }) {
   const paths = {
@@ -33,10 +34,20 @@ export default function Dashboard({ session }) {
   const fetchMatters = useCallback(async () => {
     setLoading(true)
     setError(null)
-    const { data, error: err } = await supabase
+    let { data, error: err } = await supabase
       .from('matters')
-      .select('id, matter_type, status, esign_status, esign_reference, created_at, clients(name, email), conflict_checks(result, checked_at)')
+      .select('id, firm_id, matter_type, status, esign_status, esign_reference, created_at, clients(name, email), conflict_checks(result, checked_at), consultations(id, status, booking_url, attorney_email, invited_at, scheduled_at)')
       .order('created_at', { ascending: false })
+
+    // Keep the dashboard usable until consultation_migration.sql is applied.
+    if (err && err.message?.toLowerCase().includes('consultation')) {
+      const fallback = await supabase
+        .from('matters')
+        .select('id, firm_id, matter_type, status, esign_status, esign_reference, created_at, clients(name, email), conflict_checks(result, checked_at)')
+        .order('created_at', { ascending: false })
+      data = fallback.data?.map((matter) => ({ ...matter, consultations: [] }))
+      err = fallback.error
+    }
 
     if (err) setError(err.message)
     else setMatters(data || [])
@@ -49,6 +60,7 @@ export default function Dashboard({ session }) {
     active: matters.length,
     newIntakes: matters.filter((m) => m.status === 'intake_pending').length,
     conflicts: matters.filter((m) => !m.conflict_checks?.length).length,
+    consultations: matters.filter((m) => m.consultations?.[0]?.status === 'scheduled').length,
     signatures: matters.filter((m) => m.esign_status === 'sent').length,
   }), [matters])
 
@@ -63,6 +75,8 @@ export default function Dashboard({ session }) {
     const matchesFilter = filter === 'All matters'
       || (filter === 'New intake' && matter.status === 'intake_pending')
       || (filter === 'Needs conflict check' && !matter.conflict_checks?.length)
+      || (filter === 'Consultation invited' && matter.consultations?.[0]?.status === 'invited')
+      || (filter === 'Consultation scheduled' && matter.consultations?.[0]?.status === 'scheduled')
       || (filter === 'Awaiting signature' && matter.esign_status === 'sent')
       || (filter === 'Signed' && matter.esign_status === 'signed')
     return matchesSearch && matchesType && matchesFilter
@@ -132,6 +146,7 @@ export default function Dashboard({ session }) {
             <MetricCard label="Total matters" value={metrics.active} detail="In the workspace" tone="navy" />
             <MetricCard label="New intakes" value={metrics.newIntakes} detail="Awaiting initial review" tone="brass" />
             <MetricCard label="Conflict checks" value={metrics.conflicts} detail="Require attention" tone="red" />
+            <MetricCard label="Consultations" value={metrics.consultations} detail="Currently scheduled" tone="navy" />
             <MetricCard label="Awaiting signature" value={metrics.signatures} detail="Engagements sent" tone="green" />
           </section>
 
@@ -190,7 +205,7 @@ function MatterTable({ matters, selectedId, onSelect }) {
             <tr key={matter.id} className={selectedId === matter.id ? 'selected' : ''} onClick={() => onSelect(matter.id)}>
               <td><div className="dash-client-cell"><span>{(client.name || 'Client').slice(0, 2).toUpperCase()}</span><div><strong>{client.name || 'Unnamed client'}</strong><small>{client.email || 'No email'}</small></div></div></td>
               <td>{matter.matter_type || 'Other'}</td>
-              <td><span className={`dash-stage ${!matter.conflict_checks?.length ? 'attention' : ''}`}>{!matter.conflict_checks?.length ? 'Conflict review' : formatStatus(matter.status)}</span></td>
+              <td><span className={`dash-stage ${!matter.conflict_checks?.length ? 'attention' : ''}`}>{matterStage(matter)}</span></td>
               <td><span className={`esign-badge ${esignBadgeClass(matter.esign_status)}`}>{formatStatus(matter.esign_status || 'not_sent')}</span></td>
               <td>{new Date(matter.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
               <td><button type="button" aria-label={`Open ${client.name || 'matter'}`}><Icon name="arrow" /></button></td>
@@ -214,21 +229,25 @@ function MatterDetail({ matter, userEmail, onClose, onMatterUpdate }) {
   const [detailError, setDetailError] = useState(null)
   const [tab, setTab] = useState('overview')
   const [expanded, setExpanded] = useState(false)
+  const [consultation, setConsultation] = useState(matter.consultations?.[0] || null)
 
   const loadDetail = useCallback(async () => {
     setLoading(true)
     setDetailError(null)
-    const [intakeRes, docsRes, conflictRes] = await Promise.all([
+    const [intakeRes, docsRes, conflictRes, consultationRes] = await Promise.all([
       supabase.from('intake_forms').select('form_data, submitted_at').eq('matter_id', matterId).order('submitted_at', { ascending: false }).limit(1).maybeSingle(),
       supabase.from('documents').select('id, file_url, doc_type, uploaded_at').eq('matter_id', matterId).order('uploaded_at', { ascending: false }),
       supabase.from('conflict_checks').select('checked_by, result, notes, checked_at').eq('matter_id', matterId).order('checked_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('consultations').select('id, status, booking_url, attorney_email, invited_at, scheduled_at').eq('matter_id', matterId).maybeSingle(),
     ])
-    const firstError = intakeRes.error || docsRes.error || conflictRes.error
+    const consultationError = consultationRes.error?.message?.toLowerCase().includes('consultation') ? null : consultationRes.error
+    const firstError = intakeRes.error || docsRes.error || conflictRes.error || consultationError
     if (firstError) setDetailError(firstError.message)
     else {
       setIntakeData(intakeRes.data || null)
       setDocs(docsRes.data || [])
       setConflictCheck(conflictRes.data || null)
+      setConsultation(consultationRes.data || null)
     }
     setLoading(false)
   }, [matterId])
@@ -250,7 +269,7 @@ function MatterDetail({ matter, userEmail, onClose, onMatterUpdate }) {
   }
 
   const canSendLetter = conflictCheck?.result === 'Clear' && esignStatus === 'not_sent'
-  const tabs = ['overview', 'intake', 'documents', 'conflict', 'engagement']
+  const tabs = ['overview', 'intake', 'documents', 'conflict', 'consultation', 'engagement']
 
   return (
     <aside className={expanded ? 'matter-drawer expanded' : 'matter-drawer'} aria-label={`${client.name || 'Client'} matter details`}>
@@ -263,8 +282,8 @@ function MatterDetail({ matter, userEmail, onClose, onMatterUpdate }) {
       </header>
 
       <div className="drawer-timeline">
-        {['Intake', 'Conflict', 'Engagement', 'Active'].map((label, index) => {
-          const complete = index === 0 || (index === 1 && conflictCheck) || (index === 2 && ['sent', 'signed'].includes(esignStatus)) || (index === 3 && esignStatus === 'signed')
+        {['Intake', 'Conflict', 'Consultation', 'Engagement', 'Active'].map((label, index) => {
+          const complete = index === 0 || (index === 1 && conflictCheck) || (index === 2 && ['scheduled', 'completed'].includes(consultation?.status)) || (index === 3 && ['sent', 'signed'].includes(esignStatus)) || (index === 4 && esignStatus === 'signed')
           return <div className={complete ? 'complete' : ''} key={label}><span>{complete ? '✓' : index + 1}</span><small>{label}</small><i /></div>
         })}
       </div>
@@ -274,10 +293,11 @@ function MatterDetail({ matter, userEmail, onClose, onMatterUpdate }) {
       <div className="drawer-body">
         {loading ? <div className="drawer-loading"><i /><p>Loading matter details…</p></div> : detailError ? <div className="dash-state error"><strong>Something went wrong</strong><p>{detailError}</p><button type="button" onClick={loadDetail}>Try again</button></div> : (
           <>
-            {tab === 'overview' && <OverviewTab matter={matter} client={client} intakeData={intakeData} conflictCheck={conflictCheck} esignStatus={esignStatus} docs={docs} onNavigate={setTab} />}
+            {tab === 'overview' && <OverviewTab matter={matter} client={client} intakeData={intakeData} conflictCheck={conflictCheck} consultation={consultation} esignStatus={esignStatus} docs={docs} onNavigate={setTab} />}
             {tab === 'intake' && <IntakeTab intakeData={intakeData} />}
             {tab === 'documents' && <DocumentsTab docs={docs} openDocument={openDocument} />}
             {tab === 'conflict' && <section className="drawer-section"><SectionHeading eyebrow="Risk review" title="Conflict check" />{conflictCheck ? <ConflictDisplay conflictCheck={conflictCheck} /> : <ConflictCheckForm matterId={matterId} userEmail={userEmail} clientName={client.name || ''} clientEmail={client.email || ''} matterType={matter.matter_type || ''} onSaved={(data) => { setConflictCheck(data); onMatterUpdate(matterId, { conflict_checks: [data] }) }} />}</section>}
+            {tab === 'consultation' && <ConsultationTab matterId={matterId} firmId={matter.firm_id} client={client} matterType={matter.matter_type || ''} userEmail={userEmail} conflictCheck={conflictCheck} consultation={consultation} onUpdate={(data) => { setConsultation(data); onMatterUpdate(matterId, { consultations: data ? [data] : [] }) }} />}
             {tab === 'engagement' && <section className="drawer-section"><SectionHeading eyebrow="Client onboarding" title="Engagement letter" />{esignStatus === 'signed' ? <EngagementStatus status="signed" reference={esignRef} /> : esignStatus === 'sent' ? <EngagementStatus status="sent" reference={esignRef}><RefreshStatusButton matterId={matterId} signatureRequestId={esignRef} clientName={client.name || ''} clientEmail={client.email || ''} matterType={matter.matter_type || ''} onStatusUpdate={(newStatus) => { setEsignStatus(newStatus); onMatterUpdate(matterId, { esign_status: newStatus }) }} /></EngagementStatus> : canSendLetter ? <EngagementLetterButton matterId={matterId} clientName={client.name || ''} clientEmail={client.email || ''} matterType={matter.matter_type || ''} attorneyEmail={userEmail} onSent={(refId) => { setEsignStatus('sent'); setEsignRef(refId); onMatterUpdate(matterId, { esign_status: 'sent', esign_reference: refId }) }} /> : <div className="drawer-callout"><span>Next step</span><strong>{conflictCheck ? 'Resolve the conflict review' : 'Complete a conflict check first'}</strong><p>An engagement letter can be sent after the matter is cleared.</p></div>}</section>}
           </>
         )}
@@ -288,10 +308,10 @@ function MatterDetail({ matter, userEmail, onClose, onMatterUpdate }) {
 
 function SectionHeading({ eyebrow, title }) { return <div className="drawer-section-heading"><p>{eyebrow}</p><h3>{title}</h3></div> }
 
-function OverviewTab({ matter, client, intakeData, conflictCheck, esignStatus, docs, onNavigate }) {
+function OverviewTab({ matter, client, intakeData, conflictCheck, consultation, esignStatus, docs, onNavigate }) {
   return <div className="drawer-overview">
     <section className="drawer-section"><SectionHeading eyebrow="At a glance" title="Matter overview" /><dl className="overview-grid"><div><dt>Client email</dt><dd>{client.email || '—'}</dd></div><div><dt>Practice area</dt><dd>{matter.matter_type || '—'}</dd></div><div><dt>Received</dt><dd>{new Date(matter.created_at).toLocaleDateString()}</dd></div><div><dt>Matter status</dt><dd>{formatStatus(matter.status)}</dd></div></dl></section>
-    <section className="drawer-section"><SectionHeading eyebrow="Workflow" title="Required actions" /><div className="action-list"><ActionRow complete={Boolean(intakeData)} label="Review client intake" action="intake" onNavigate={onNavigate} /><ActionRow complete={Boolean(conflictCheck)} label="Complete conflict check" action="conflict" onNavigate={onNavigate} /><ActionRow complete={['sent', 'signed'].includes(esignStatus)} label="Send engagement letter" action="engagement" onNavigate={onNavigate} /><ActionRow complete={esignStatus === 'signed'} label="Client signature received" action="engagement" onNavigate={onNavigate} /></div></section>
+    <section className="drawer-section"><SectionHeading eyebrow="Workflow" title="Required actions" /><div className="action-list"><ActionRow complete={Boolean(intakeData)} label="Review client intake" action="intake" onNavigate={onNavigate} /><ActionRow complete={Boolean(conflictCheck)} label="Complete conflict check" action="conflict" onNavigate={onNavigate} /><ActionRow complete={['invited', 'scheduled', 'completed'].includes(consultation?.status)} label="Invite client to consult" action="consultation" onNavigate={onNavigate} /><ActionRow complete={['scheduled', 'completed'].includes(consultation?.status)} label="Consultation scheduled" action="consultation" onNavigate={onNavigate} /><ActionRow complete={['sent', 'signed'].includes(esignStatus)} label="Send engagement letter" action="engagement" onNavigate={onNavigate} /><ActionRow complete={esignStatus === 'signed'} label="Client signature received" action="engagement" onNavigate={onNavigate} /></div></section>
     <section className="drawer-section"><SectionHeading eyebrow="Files" title={`${docs.length} document${docs.length === 1 ? '' : 's'} on file`} /><button className="drawer-text-button" type="button" onClick={() => onNavigate('documents')}>Review documents <Icon name="arrow" /></button></section>
   </div>
 }
@@ -308,11 +328,154 @@ function DocumentsTab({ docs, openDocument }) {
 
 function ConflictDisplay({ conflictCheck }) { return <div className="conflict-display"><span className={`conflict-result-badge ${badgeClass(conflictCheck.result)}`}>{conflictCheck.result}</span>{conflictCheck.notes && <p className="conflict-notes">{conflictCheck.notes}</p>}<p className="dash-meta">Checked by {conflictCheck.checked_by} on {new Date(conflictCheck.checked_at).toLocaleString()}</p></div> }
 
+function ConsultationTab({ matterId, firmId, client, matterType, userEmail, conflictCheck, consultation, onUpdate }) {
+  const [sending, setSending] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [scheduledAt, setScheduledAt] = useState(consultation?.scheduled_at ? toLocalDateTime(consultation.scheduled_at) : '')
+  const [error, setError] = useState(null)
+  const [copied, setCopied] = useState(false)
+  const cleared = conflictCheck?.result === 'Clear'
+
+  async function sendInvitation() {
+    setSending(true)
+    setError(null)
+
+    if (!CALENDLY_URL) {
+      setError('VITE_CALENDLY_URL is not configured.')
+      setSending(false)
+      return
+    }
+    if (!firmId) {
+      setError('This matter is not assigned to a firm.')
+      setSending(false)
+      return
+    }
+
+    const baseRecord = {
+      matter_id: matterId,
+      firm_id: firmId,
+      provider: 'calendly',
+      status: consultation?.status || 'not_invited',
+      booking_url: CALENDLY_URL,
+      attorney_email: userEmail,
+      updated_at: new Date().toISOString(),
+    }
+    const { data: saved, error: saveError } = await supabase
+      .from('consultations')
+      .upsert(baseRecord, { onConflict: 'matter_id' })
+      .select('id, status, booking_url, attorney_email, invited_at, scheduled_at')
+      .single()
+
+    if (saveError) {
+      setError(`${saveError.message}. Run consultation_migration.sql in Supabase if you have not already.`)
+      setSending(false)
+      return
+    }
+
+    const { data: emailData, error: emailError } = await supabase.functions.invoke('send-notification-email', {
+      body: {
+        matter_id: matterId,
+        email_type: 'consultation_invite',
+        recipient_email: client.email,
+        recipient_name: client.name,
+        matter_type: matterType,
+        scheduling_url: CALENDLY_URL,
+      },
+    })
+
+    if (emailError || emailData?.error) {
+      let message = emailData?.error || emailError?.message || 'Could not send the scheduling invitation.'
+      try {
+        const body = await emailError?.context?.clone().json()
+        if (body?.error) message = body.error
+      } catch { /* keep the available message */ }
+      setError(`${message} The consultation record was saved, but the email was not marked sent.`)
+      onUpdate(saved)
+      setSending(false)
+      return
+    }
+
+    const invitedAt = new Date().toISOString()
+    const { data: updated, error: updateError } = await supabase
+      .from('consultations')
+      .update({ status: consultation?.status === 'scheduled' ? 'scheduled' : 'invited', invited_at: invitedAt, updated_at: invitedAt })
+      .eq('matter_id', matterId)
+      .select('id, status, booking_url, attorney_email, invited_at, scheduled_at')
+      .single()
+
+    if (updateError) setError(`The email was sent, but status could not be updated: ${updateError.message}`)
+    else onUpdate(updated)
+    setSending(false)
+  }
+
+  async function saveScheduledTime(e) {
+    e.preventDefault()
+    if (!scheduledAt) return
+    if (!firmId) {
+      setError('This matter is not assigned to a firm.')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    const timestamp = new Date(scheduledAt).toISOString()
+    const { data, error: saveError } = await supabase
+      .from('consultations')
+      .upsert({ matter_id: matterId, firm_id: firmId, provider: 'calendly', status: 'scheduled', booking_url: CALENDLY_URL, attorney_email: userEmail, scheduled_at: timestamp, updated_at: new Date().toISOString() }, { onConflict: 'matter_id' })
+      .select('id, status, booking_url, attorney_email, invited_at, scheduled_at')
+      .single()
+    if (saveError) setError(saveError.message)
+    else onUpdate(data)
+    setSaving(false)
+  }
+
+  async function copyLink() {
+    await navigator.clipboard.writeText(CALENDLY_URL)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1600)
+  }
+
+  if (!cleared) {
+    return <section className="drawer-section"><SectionHeading eyebrow="Consultation scheduling" title="Initial consultation" /><div className="drawer-callout"><span>Conflict review required</span><strong>Scheduling is not available yet</strong><p>Clear the conflict check before inviting this prospective client to select a consultation time.</p></div></section>
+  }
+
+  return <section className="drawer-section consultation-section">
+    <SectionHeading eyebrow="Calendly scheduling" title="Initial consultation" />
+    <div className={`consultation-status-card ${consultation?.status || 'not-invited'}`}>
+      <div><span>Status</span><strong>{formatStatus(consultation?.status || 'not_invited')}</strong></div>
+      {consultation?.scheduled_at && <div><span>Scheduled for</span><strong>{new Date(consultation.scheduled_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</strong></div>}
+      {consultation?.invited_at && <div><span>Invitation last sent</span><strong>{new Date(consultation.invited_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</strong></div>}
+    </div>
+
+    <div className="consultation-actions">
+      <button type="button" className="consultation-primary" onClick={sendInvitation} disabled={sending || !client.email}>{sending ? 'Sending invitation…' : consultation?.invited_at ? 'Resend invitation' : 'Send scheduling invitation'} <Icon name="arrow" /></button>
+      <button type="button" onClick={() => window.open(CALENDLY_URL, '_blank', 'noopener,noreferrer')}>Preview booking page</button>
+      <button type="button" onClick={copyLink}>{copied ? 'Copied' : 'Copy link'}</button>
+    </div>
+    {error && <div className="dash-inline-error">{error}</div>}
+
+    <form className="consultation-manual" onSubmit={saveScheduledTime}>
+      <div><span>Free-plan tracking</span><strong>Record the booked time</strong><p>After the client books in Calendly, copy the appointment time here. A paid webhook integration can automate this later.</p></div>
+      <label>Consultation date and time<input type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} required /></label>
+      <button type="submit" disabled={saving || !scheduledAt}>{saving ? 'Saving…' : 'Mark as scheduled'}</button>
+    </form>
+  </section>
+}
+
 function EngagementStatus({ status, reference, children }) { return <div className="engagement-status-card"><div><span className={`esign-badge ${esignBadgeClass(status)}`}>{formatStatus(status)}</span>{children}</div><p>Dropbox Sign request</p><code>{reference || 'Reference unavailable'}</code></div> }
 
 function badgeClass(result) { return result === 'Clear' ? 'badge-clear' : result === 'Conflict found' ? 'badge-conflict' : 'badge-review' }
 function esignBadgeClass(status) { return status === 'signed' ? 'esign-signed' : status === 'sent' ? 'esign-sent' : 'esign-not-sent' }
 function formatStatus(value) { return String(value || '—').replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) }
+function toLocalDateTime(value) { const date = new Date(value); const offset = date.getTimezoneOffset(); return new Date(date.getTime() - offset * 60000).toISOString().slice(0, 16) }
+function matterStage(matter) {
+  if (!matter.conflict_checks?.length) return 'Conflict review'
+  const consultationStatus = matter.consultations?.[0]?.status
+  if (consultationStatus === 'scheduled') return 'Consultation scheduled'
+  if (consultationStatus === 'invited') return 'Scheduling invited'
+  if (matter.esign_status === 'sent') return 'Engagement sent'
+  if (matter.esign_status === 'signed') return 'Active client'
+  return 'Ready to schedule'
+}
 
 const CONFLICT_RESULTS = ['Clear', 'Conflict found', 'Needs review']
 
