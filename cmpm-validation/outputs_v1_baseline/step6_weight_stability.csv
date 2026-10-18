@@ -1,0 +1,6 @@
+project,baseline_score,baseline_rank,P_top2,mean_kendall_tau
+lab_ventilation,88.9,1,1.0,0.9029200000000248
+central_plant,83.9,2,1.0,0.9029200000000248
+classroom_bas,73.9,3,0.0,0.9029200000000248
+electrical_monitoring,64.85,5,0.0,0.9029200000000248
+dorm_occupancy,64.89999999999999,4,0.0,0.9029200000000248

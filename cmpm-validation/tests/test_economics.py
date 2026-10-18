@@ -28,7 +28,7 @@ CLAIMED = {
     "lab_ventilation":       {"npv": 633_000, "payback": 2.15, "irr": 0.45},
     "central_plant":         {"npv": 1_118_000, "payback": 3.64, "irr": 0.24},
     "classroom_bas":         {"npv": 241_000, "payback": 3.00, "irr": 0.31},
-    "electrical_monitoring": {"npv": 809_000, "payback": 2.12, "irr": 0.46},
+    "electrical_monitoring": {"npv": 300_000, "payback": 3.78, "irr": 0.23},  # v2: benefit = $92.5k
     "dorm_occupancy":        {"npv": 166_000, "payback": 4.00, "irr": 0.21},
 }
 

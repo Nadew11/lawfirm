@@ -1,0 +1,4 @@
+sequence,order,npv
+plant_first,central_plant -> lab_ventilation -> classroom_bas,1992262.4012849517
+plant_last,lab_ventilation -> classroom_bas -> central_plant,1528706.0195834003
+simultaneous,all at once,1528706.0195834003

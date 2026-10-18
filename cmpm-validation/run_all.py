@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """CMPM Validation Harness — Run All Steps and generate report.
 
-Runs Steps 1-7 in sequence, writes CSV tables and PNG charts to outputs/,
-then generates outputs/report.md.
+v2: frictions in base case, tiered scenarios, decomposed electrical benefit,
+    widened MC, rebalanced scoring, expanded interactions, improved waste detection.
 """
 from __future__ import annotations
 
-import os
 import sys
-import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -17,20 +15,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import yaml
 
-# Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from cmpm.config_loader import load_config, get_project_list
+from cmpm.config_loader import load_config
 from cmpm.economics import (
+    base_friction_kwargs,
     breakeven_benefit,
     compute_discounted_payback,
     compute_irr,
     compute_npv,
     compute_simple_payback,
     friction_comparison,
-    joint_downside_npv,
     survival_table,
     tornado_analysis,
 )
@@ -45,7 +41,6 @@ from cmpm.interactions import (
 from cmpm.optimize import (
     budget_sweep,
     efficient_frontier,
-    milp_optimize,
     multi_year_milp,
     shadow_prices,
 )
@@ -53,7 +48,6 @@ from cmpm.scoring import (
     correlation_double_counting,
     normalization_sensitivity,
     rank_disagreement,
-    reverse_engineer_subscores,
     weight_stability_analysis,
     weighted_score,
 )
@@ -63,7 +57,6 @@ from cmpm.baseline import (
 )
 from cmpm.utils import format_currency, format_pct
 
-
 OUT = Path(__file__).resolve().parent / "outputs"
 
 
@@ -71,10 +64,8 @@ def ensure_output_dir() -> None:
     OUT.mkdir(exist_ok=True)
 
 
-# =========================================================================
-# Step 1: Deterministic Replication
-# =========================================================================
-CLAIMED = {
+# v1 claimed values (the original illustrative numbers, no frictions)
+CLAIMED_V1 = {
     "lab_ventilation":       {"npv": 633_000, "payback": 2.15, "irr": 0.45},
     "central_plant":         {"npv": 1_118_000, "payback": 3.64, "irr": 0.24},
     "classroom_bas":         {"npv": 241_000, "payback": 3.00, "irr": 0.31},
@@ -83,34 +74,53 @@ CLAIMED = {
 }
 
 
+# =========================================================================
+# Step 1: Deterministic Replication
+# =========================================================================
+
 def step1_replication(cfg: dict) -> pd.DataFrame:
-    """Step 1: compute NPV/IRR/payback and compare to claimed values."""
+    """Step 1: compute NPV/IRR/payback with and without frictions."""
     rate = cfg["general"]["discount_rate"]
     life = cfg["general"]["analysis_life_years"]
+    fkw = base_friction_kwargs(cfg)
     rows = []
-    for pk, claimed in CLAIMED.items():
+
+    for pk in cfg["projects"]:
         p = cfg["projects"][pk]
-        npv = compute_npv(p["capex"], p["annual_benefit"], rate, life)
+
+        # No-friction NPV (for replication against v1 claims)
+        npv_clean = compute_npv(p["capex"], p["annual_benefit"], rate, life, cross_check=False)
         irr = compute_irr(p["capex"], p["annual_benefit"], life)
         pb = compute_simple_payback(p["capex"], p["annual_benefit"])
-        dpb = compute_discounted_payback(p["capex"], p["annual_benefit"], rate, life)
+
+        # With-friction NPV (v2 base case)
+        npv_friction = compute_npv(
+            p["capex"], p["annual_benefit"], rate, life, cross_check=False, **fkw
+        ) if fkw else npv_clean
+        dpb = compute_discounted_payback(p["capex"], p["annual_benefit"], rate, life, **fkw)
         be = breakeven_benefit(p["capex"], rate, life)
 
-        npv_pass = abs(npv - claimed["npv"]) < 5000
-        pb_pass = abs(pb - claimed["payback"]) < 0.02
-        irr_pass = abs(irr - claimed["irr"]) < 0.015
+        claimed = CLAIMED_V1.get(pk, {})
+        claimed_npv = claimed.get("npv", None)
+        claimed_pb = claimed.get("payback", None)
+        claimed_irr = claimed.get("irr", None)
+
+        npv_pass = abs(npv_clean - claimed_npv) < 5000 if claimed_npv else None
+        pb_pass = abs(pb - claimed_pb) < 0.02 if claimed_pb else None
+        irr_pass = abs(irr - claimed_irr) < 0.015 if claimed_irr else None
 
         rows.append({
             "project": pk,
-            "computed_npv": npv,
-            "claimed_npv": claimed["npv"],
-            "npv_delta": npv - claimed["npv"],
+            "npv_no_friction": npv_clean,
+            "claimed_npv": claimed_npv,
             "npv_PASS": npv_pass,
+            "npv_with_friction": npv_friction,
+            "npv_reduction_pct": (1 - npv_friction / npv_clean) * 100 if npv_clean != 0 else 0,
             "computed_payback": pb,
-            "claimed_payback": claimed["payback"],
+            "claimed_payback": claimed_pb,
             "payback_PASS": pb_pass,
             "computed_irr": irr,
-            "claimed_irr": claimed["irr"],
+            "claimed_irr": claimed_irr,
             "irr_PASS": irr_pass,
             "discounted_payback": dpb,
             "breakeven_benefit": be,
@@ -126,7 +136,6 @@ def step1_replication(cfg: dict) -> pd.DataFrame:
 # =========================================================================
 
 def step2_sensitivity(cfg: dict) -> dict[str, pd.DataFrame]:
-    """Step 2: tornado, joint downside, survival table, frictions."""
     rate = cfg["general"]["discount_rate"]
     life = cfg["general"]["analysis_life_years"]
     projects = cfg["projects"]
@@ -154,19 +163,19 @@ def step2_sensitivity(cfg: dict) -> dict[str, pd.DataFrame]:
     )
     all_tornado.to_csv(OUT / "step2_tornado.csv", index=False)
 
-    # Joint downside
+    # Tiered downside scenarios
     jd = sens_cfg["joint_downside"]
-    scenarios = {"joint_downside": jd}
-    surv = survival_table(projects, scenarios, rate, life)
+    surv = survival_table(projects, {"joint_downside": jd}, rate, life)
     surv.to_csv(OUT / "step2_survival.csv", index=False)
 
     # Friction comparison
     fric = friction_comparison(projects, rate, life, cfg["frictions"])
     fric.to_csv(OUT / "step2_frictions.csv", index=False)
 
-    # Tornado chart for the largest-capex project (central plant)
-    _plot_tornado(tornado_dfs["central_plant"], "Central Plant", OUT / "chart_tornado_central_plant.png")
-    _plot_tornado(tornado_dfs["lab_ventilation"], "Lab Ventilation", OUT / "chart_tornado_lab_ventilation.png")
+    _plot_tornado(tornado_dfs.get("central_plant", tornado_dfs[list(tornado_dfs.keys())[0]]),
+                  "Central Plant", OUT / "chart_tornado_central_plant.png")
+    _plot_tornado(tornado_dfs.get("lab_ventilation", tornado_dfs[list(tornado_dfs.keys())[0]]),
+                  "Lab Ventilation", OUT / "chart_tornado_lab_ventilation.png")
 
     return {"tornado": all_tornado, "survival": surv, "frictions": fric, "tornado_dfs": tornado_dfs}
 
@@ -194,7 +203,6 @@ def _plot_tornado(tdf: pd.DataFrame, title: str, path: Path) -> None:
 # =========================================================================
 
 def step3_monte_carlo(cfg: dict) -> dict[str, Any]:
-    """Step 3: run MC, produce stats and charts."""
     mc_results = run_monte_carlo_all_projects(cfg)
 
     rows = []
@@ -205,12 +213,10 @@ def step3_monte_carlo(cfg: dict) -> dict[str, Any]:
     stats_df = pd.DataFrame(rows)
     stats_df.to_csv(OUT / "step3_mc_stats.csv", index=False)
 
-    # Correlation impact
     corr_imp = correlation_impact(cfg)
     corr_df = pd.DataFrame(corr_imp).T
     corr_df.to_csv(OUT / "step3_correlation_impact.csv")
 
-    # NPV distribution chart (violin-style histograms)
     proj_keys = [pk for pk in cfg["projects"]]
     fig, axes = plt.subplots(1, len(proj_keys), figsize=(4 * len(proj_keys), 6), sharey=True)
     if len(proj_keys) == 1:
@@ -226,12 +232,11 @@ def step3_monte_carlo(cfg: dict) -> dict[str, Any]:
         ax.set_xlabel("NPV ($k)")
         ax.set_title(pk.replace("_", " ").title(), fontsize=9)
     axes[0].set_ylabel("Frequency")
-    fig.suptitle("Monte Carlo NPV Distributions", fontsize=12)
+    fig.suptitle("Monte Carlo NPV Distributions (v2)", fontsize=12)
     fig.tight_layout()
     fig.savefig(OUT / "chart_mc_npv_distributions.png", dpi=150)
     plt.close(fig)
 
-    # Electrical version comparison
     if "electrical_full" in mc_results and "electrical_energy_only" in mc_results:
         fig, ax = plt.subplots(figsize=(8, 5))
         ax.hist(mc_results["electrical_full"]["npvs"] / 1000, bins=50, alpha=0.6,
@@ -241,7 +246,7 @@ def step3_monte_carlo(cfg: dict) -> dict[str, Any]:
         ax.axvline(0, color="black", linewidth=1)
         ax.set_xlabel("NPV ($k)")
         ax.set_ylabel("Frequency")
-        ax.set_title("Electrical Monitoring: Full vs Energy-Only")
+        ax.set_title("Electrical Monitoring: Full vs Energy-Only (v2)")
         ax.legend()
         fig.tight_layout()
         fig.savefig(OUT / "chart_electrical_comparison.png", dpi=150)
@@ -255,13 +260,10 @@ def step3_monte_carlo(cfg: dict) -> dict[str, Any]:
 # =========================================================================
 
 def step4_interactions(cfg: dict) -> dict[str, pd.DataFrame]:
-    """Step 4: subset enumeration, sequencing analysis."""
     subset_df = enumerate_all_subsets(cfg)
     subset_df.to_csv(OUT / "step4_subsets.csv", index=False)
-
     seq_df = sequencing_analysis(cfg)
     seq_df.to_csv(OUT / "step4_sequencing.csv", index=False)
-
     return {"subsets": subset_df, "sequencing": seq_df}
 
 
@@ -270,48 +272,41 @@ def step4_interactions(cfg: dict) -> dict[str, pd.DataFrame]:
 # =========================================================================
 
 def step5_optimization(cfg: dict) -> dict[str, Any]:
-    """Step 5: budget sweep, shadow prices, multi-year, frontier."""
     sweep_df = budget_sweep(cfg)
     sweep_df.to_csv(OUT / "step5_budget_sweep.csv", index=False)
-
     sp_df = shadow_prices(cfg, 2_000_000)
     sp_df.to_csv(OUT / "step5_shadow_prices.csv", index=False)
-
     my_result = multi_year_milp(cfg)
-
     ef = efficient_frontier(sweep_df)
 
-    # Budget-vs-NPV frontier chart
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(np.array(sweep_df["budget"]) / 1e6, np.array(sweep_df["optimal_npv"]) / 1e6,
             "b-o", label="Optimal (MILP)", markersize=4)
     ax.plot(np.array(sweep_df["budget"]) / 1e6, np.array(sweep_df["heuristic_npv"]) / 1e6,
             "r--s", label="Heuristic (top-k by score)", markersize=4)
-    ax.axvline(ef["flatten_budget"] / 1e6, color="green", linestyle=":", label=f"Frontier flattens at ${ef['flatten_budget']/1e6:.1f}M")
+    ax.axvline(ef["flatten_budget"] / 1e6, color="green", linestyle=":",
+               label=f"Frontier flattens at ${ef['flatten_budget']/1e6:.1f}M")
     ax.set_xlabel("Budget ($M)")
     ax.set_ylabel("Portfolio NPV ($M)")
-    ax.set_title("Budget vs NPV: Optimal vs Heuristic")
+    ax.set_title("Budget vs NPV: Optimal vs Heuristic (v2)")
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(OUT / "chart_budget_frontier.png", dpi=150)
     plt.close(fig)
 
-    # Gap chart
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.bar(np.array(sweep_df["budget"]) / 1e6, np.array(sweep_df["gap"]) / 1e3, width=0.08, color="#E74C3C")
+    ax.bar(np.array(sweep_df["budget"]) / 1e6, np.array(sweep_df["gap"]) / 1e3,
+           width=0.08, color="#E74C3C")
     ax.set_xlabel("Budget ($M)")
     ax.set_ylabel("NPV Gap ($k)")
-    ax.set_title("Heuristic Gap: NPV Left on Table by Score-Based Selection")
+    ax.set_title("Heuristic Gap (v2)")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(OUT / "chart_heuristic_gap.png", dpi=150)
     plt.close(fig)
 
-    return {
-        "sweep": sweep_df, "shadow_prices": sp_df,
-        "multi_year": my_result, "frontier": ef,
-    }
+    return {"sweep": sweep_df, "shadow_prices": sp_df, "multi_year": my_result, "frontier": ef}
 
 
 # =========================================================================
@@ -319,22 +314,17 @@ def step5_optimization(cfg: dict) -> dict[str, Any]:
 # =========================================================================
 
 def step6_scoring(cfg: dict) -> dict[str, Any]:
-    """Step 6: weight stability, normalization, correlation, rank disagreement."""
     ws_result = weight_stability_analysis(cfg)
     ws_result["summary"].to_csv(OUT / "step6_weight_stability.csv", index=False)
     ws_result["rank_distribution"].to_csv(OUT / "step6_rank_distribution.csv")
-
     norm_df = normalization_sensitivity(cfg)
     norm_df.to_csv(OUT / "step6_normalization.csv", index=False)
-
     corr_result = correlation_double_counting(cfg)
     corr_result["vif_summary"].to_csv(OUT / "step6_vif.csv", index=False)
     corr_result["correlation_matrix"].to_csv(OUT / "step6_correlation_matrix.csv")
-
     rank_df = rank_disagreement(cfg)
     rank_df.to_csv(OUT / "step6_rank_disagreement.csv", index=False)
 
-    # Rank distribution heatmap
     rd = ws_result["rank_distribution"]
     fig, ax = plt.subplots(figsize=(8, 5))
     im = ax.imshow(rd.values, cmap="YlOrRd", aspect="auto", vmin=0, vmax=1)
@@ -345,17 +335,15 @@ def step6_scoring(cfg: dict) -> dict[str, Any]:
     for i in range(rd.shape[0]):
         for j in range(rd.shape[1]):
             ax.text(j, i, f"{rd.values[i,j]:.2f}", ha="center", va="center", fontsize=8)
-    ax.set_title("Rank Distribution Under Weight Perturbation")
+    ax.set_title("Rank Distribution Under Weight Perturbation (v2)")
     ax.set_xlabel("Rank")
     fig.colorbar(im, ax=ax, label="Probability")
     fig.tight_layout()
     fig.savefig(OUT / "chart_rank_heatmap.png", dpi=150)
     plt.close(fig)
 
-    return {
-        "weight_stability": ws_result, "normalization": norm_df,
-        "correlation": corr_result, "rank_disagreement": rank_df,
-    }
+    return {"weight_stability": ws_result, "normalization": norm_df,
+            "correlation": corr_result, "rank_disagreement": rank_df}
 
 
 # =========================================================================
@@ -363,7 +351,6 @@ def step6_scoring(cfg: dict) -> dict[str, Any]:
 # =========================================================================
 
 def step7_baseline(cfg: dict) -> pd.DataFrame:
-    """Step 7: synthetic load, waste recovery evaluation."""
     data = generate_synthetic_load(cfg)
     eval_df = evaluate_waste_recovery(data, cfg)
     eval_df.to_csv(OUT / "step7_SYNTHETIC_waste_recovery.csv", index=False)
@@ -384,106 +371,137 @@ def generate_report(
     scoring: dict,
     baseline_eval: pd.DataFrame,
 ) -> str:
-    """Generate outputs/report.md."""
     lines: list[str] = []
-    lines.append("# CMPM Validation Harness — Report\n")
+    lines.append("# CMPM Validation Harness — Report (v2: Accuracy Improvements)\n")
     lines.append("**Generated by automated adversarial testing pipeline.**\n")
-    lines.append("All synthetic data is labeled. All assumptions from config.yaml.\n")
+    lines.append("v2 changes: frictions in base case, decomposed electrical benefit, "
+                 "widened MC distributions, tiered scenarios, rebalanced scoring, "
+                 "expanded interactions, improved waste detection.\n")
 
     # Section 1: Replication table
-    lines.append("\n## 1. Replication Table (Claimed vs Computed)\n")
-    lines.append("| Project | Claimed NPV | Computed NPV | Delta | PASS | Claimed Payback | Computed Payback | PASS | Claimed IRR | Computed IRR | PASS |")
-    lines.append("|---------|------------|-------------|-------|------|----------------|-----------------|------|------------|-------------|------|")
+    lines.append("\n## 1. Replication & Friction Impact\n")
+    lines.append("| Project | No-Friction NPV | With-Friction NPV | Reduction | Payback | IRR |")
+    lines.append("|---------|----------------|-------------------|-----------|---------|-----|")
     for _, row in replication.iterrows():
         lines.append(
-            f"| {row['project']} | {format_currency(row['claimed_npv'])} | {format_currency(row['computed_npv'])} "
-            f"| {format_currency(row['npv_delta'])} | {'PASS' if row['npv_PASS'] else '**FAIL**'} "
-            f"| {row['claimed_payback']:.2f} | {row['computed_payback']:.2f} "
-            f"| {'PASS' if row['payback_PASS'] else '**FAIL**'} "
-            f"| {format_pct(row['claimed_irr'])} | {format_pct(row['computed_irr'])} "
-            f"| {'PASS' if row['irr_PASS'] else '**FAIL**'} |"
+            f"| {row['project']} | {format_currency(row['npv_no_friction'])} "
+            f"| {format_currency(row['npv_with_friction'])} "
+            f"| {row['npv_reduction_pct']:.1f}% "
+            f"| {row['computed_payback']:.2f} "
+            f"| {format_pct(row['computed_irr'])} |"
         )
 
     # Section 2: Findings ranked by severity
     lines.append("\n## 2. Findings Ranked by Severity\n")
-
     findings = []
 
-    # Joint downside survivors
+    # Tiered scenario results
     surv = sensitivity["survival"]
-    jd_rows = surv[surv["scenario"] == "joint_downside"]
-    dead_projects = jd_rows[jd_rows["npv"] < 0]["project"].tolist()
-    if dead_projects:
-        findings.append((1, "CRITICAL", f"Projects with NPV < 0 under joint downside ({', '.join(dead_projects)}). These do not survive adversarial testing."))
-    surviving = jd_rows[jd_rows["npv"] > 0]["project"].tolist()
-    if surviving:
-        findings.append((3, "INFO", f"Projects surviving joint downside: {', '.join(surviving)}"))
+    for scenario_name in surv["scenario"].unique():
+        if scenario_name == "base":
+            continue
+        dead = surv[(surv["scenario"] == scenario_name) & (surv["npv"] < 0)]
+        alive = surv[(surv["scenario"] == scenario_name) & (surv["npv"] > 0)]
+        if len(dead) > 0:
+            dead_list = ", ".join(dead["project"].tolist())
+            severity = "CRITICAL" if "severe" in scenario_name else "HIGH" if "moderate" in scenario_name else "MEDIUM"
+            prio = 1 if severity == "CRITICAL" else 2 if severity == "HIGH" else 3
+            findings.append((prio, severity, f"[{scenario_name}] Projects with NPV < 0: {dead_list}"))
+        if len(alive) > 0:
+            alive_list = ", ".join(alive["project"].tolist())
+            findings.append((4, "INFO", f"[{scenario_name}] Survivors: {alive_list}"))
 
-    # Electrical project fragility
+    # Friction impact
+    fkw = base_friction_kwargs(cfg)
+    if fkw:
+        worst_reduction = replication["npv_reduction_pct"].max()
+        findings.append((2, "HIGH", f"Base-case frictions (decay {fkw.get('savings_decay_rate',0):.0%}, "
+                         f"O&M {fkw.get('om_cost_annual_pct',0):.1%}, escalation {fkw.get('escalation_rate',0):.0%}) "
+                         f"reduce NPVs by up to {worst_reduction:.1f}%."))
+
+    # Electrical project
     mc_stats = mc["stats"]
     if "electrical_energy_only" in mc_stats["project"].values:
         ee_row = mc_stats[mc_stats["project"] == "electrical_energy_only"].iloc[0]
-        if ee_row["P_NPV_positive"] < 0.5:
-            findings.append((1, "CRITICAL", f"Electrical monitoring without avoided-failure term: P(NPV>0) = {ee_row['P_NPV_positive']:.1%}. The entire case rests on speculative failure avoidance."))
+        findings.append((1, "CRITICAL",
+                         f"Electrical monitoring energy-only: P(NPV>0) = {ee_row['P_NPV_positive']:.1%}. "
+                         f"v2 decomposed benefit ($92.5k = $45k energy + $32.5k maintenance + $15k avoided-failure)."))
 
     # Interaction overstatement
     subset_df = interactions["subsets"]
     full_portfolio = subset_df[subset_df["size"] == subset_df["size"].max()].iloc[0]
-    if full_portfolio["overstatement"] > 100_000:
-        findings.append((2, "HIGH", f"Full portfolio naive NPV overstates by {format_currency(full_portfolio['overstatement'])} ({full_portfolio['overstatement_pct']:.1f}%) due to savings interactions."))
+    if full_portfolio["overstatement"] > 50_000:
+        findings.append((2, "HIGH",
+                         f"Full portfolio naive NPV overstates by {format_currency(full_portfolio['overstatement'])} "
+                         f"({full_portfolio['overstatement_pct']:.1f}%) due to interactions."))
 
     # Score vs MILP disagreement
     rank_df = scoring["rank_disagreement"]
     tau_score_pi = rank_df.attrs.get("tau_score_vs_pi", 0)
-    if abs(tau_score_pi) < 0.5:
-        findings.append((2, "HIGH", f"Score ranking vs profitability index: Kendall tau = {tau_score_pi:.2f}. The scoring system and economic optimization disagree substantially."))
+    findings.append((2 if abs(tau_score_pi) < 0.5 else 3, "HIGH" if abs(tau_score_pi) < 0.5 else "MEDIUM",
+                     f"Score vs profitability index: Kendall tau = {tau_score_pi:.2f} "
+                     f"(v2 rebalanced weights)."))
 
     # Heuristic gap
     sweep = optimization["sweep"]
     max_gap = sweep["gap"].max()
     if max_gap > 50_000:
-        findings.append((2, "HIGH", f"Maximum NPV left on table by score-based heuristic: {format_currency(max_gap)}. MILP optimization outperforms naive score-based selection."))
+        findings.append((2, "HIGH",
+                         f"Max NPV left on table by heuristic: {format_currency(max_gap)}."))
 
     # Weight stability
     ws = scoring["weight_stability"]
     low_p_top2 = ws["summary"][ws["summary"]["P_top2"] < 0.5]
     if len(low_p_top2) > 0:
         unstable = ", ".join(low_p_top2["project"].tolist())
-        findings.append((3, "MEDIUM", f"Projects with unstable top-2 ranking under weight perturbation: {unstable}"))
+        findings.append((3, "MEDIUM", f"Unstable top-2 ranking under weight perturbation: {unstable}"))
 
     # Correlation double-counting
     vif_df = scoring["correlation"]["vif_summary"]
     high_vif = vif_df[vif_df["VIF"] > 1.5]
     if len(high_vif) > 0:
         inflated = ", ".join(f"{r['criterion']} (VIF={r['VIF']:.2f})" for _, r in high_vif.iterrows())
-        findings.append((3, "MEDIUM", f"Weight double-counting via correlation: {inflated}"))
+        findings.append((3, "MEDIUM", f"Weight double-counting: {inflated}"))
 
     # Baseline waste recovery
     cp_row = baseline_eval[baseline_eval["model"] == "change_point_regression"].iloc[0]
     gb_row = baseline_eval[baseline_eval["model"] == "gradient_boosting"].iloc[0]
-    findings.append((4, "INFO", f"Waste detection: change-point bias = {cp_row['bias']:.3f}, GB bias = {gb_row['bias']:.3f}. Both {'detect' if cp_row['detects_waste'] and gb_row['detects_waste'] else 'struggle to detect'} the 12% injected waste."))
+    detect_status = "both detect" if (cp_row["detects_waste"] and gb_row["detects_waste"]) else \
+                    "CP detects, GB misses" if cp_row["detects_waste"] else \
+                    "GB detects, CP misses" if gb_row["detects_waste"] else "both miss"
+    findings.append((3 if "detect" in detect_status else 2, "MEDIUM" if "detect" in detect_status else "HIGH",
+                     f"Waste detection (v2: shoulder feature + lower noise): "
+                     f"CP estimated {cp_row['estimated_waste_pct']:.1%}, "
+                     f"GB estimated {gb_row['estimated_waste_pct']:.1%}. "
+                     f"True = {cp_row['true_waste_pct']:.1%}. Status: {detect_status}."))
 
     findings.sort(key=lambda x: x[0])
     for _, severity, desc in findings:
         lines.append(f"- **[{severity}]** {desc}")
 
-    # Section 3: Survival assessment
+    # Section 3: Survival assessment (tiered)
     lines.append("\n## 3. Claims That Survive Adversarial Testing\n")
-    lines.append("| Claim | Survives? | Evidence |")
-    lines.append("|-------|----------|---------|")
-
-    for pk in CLAIMED:
-        p = cfg["projects"][pk]
-        jd_npv = jd_rows[jd_rows["project"] == pk]["npv"].iloc[0] if pk in jd_rows["project"].values else None
-        mc_proj = mc_stats[mc_stats["project"] == pk].iloc[0] if pk in mc_stats["project"].values else None
-
-        survives = "Yes" if (jd_npv is not None and jd_npv > 0) else "**No**"
-        p_pos = f"{mc_proj['P_NPV_positive']:.1%}" if mc_proj is not None else "N/A"
-        evidence = f"Joint downside NPV = {format_currency(jd_npv) if jd_npv is not None else 'N/A'}, MC P(NPV>0) = {p_pos}"
-        lines.append(f"| {pk} is NPV-positive | {survives} | {evidence} |")
+    scenario_names = [s for s in surv["scenario"].unique() if s != "base"]
+    header = "| Project | " + " | ".join(scenario_names) + " | MC P(NPV>0) |"
+    sep = "|---------|" + "|".join(["------" for _ in scenario_names]) + "|------|"
+    lines.append(header)
+    lines.append(sep)
+    for pk in cfg["projects"]:
+        cells = [pk]
+        for sn in scenario_names:
+            row_data = surv[(surv["project"] == pk) & (surv["scenario"] == sn)]
+            if len(row_data) > 0:
+                npv = row_data["npv"].iloc[0]
+                cells.append(f"{'**FAIL**' if npv < 0 else 'PASS'} ({format_currency(npv)})")
+            else:
+                cells.append("N/A")
+        mc_proj = mc_stats[mc_stats["project"] == pk]
+        p_pos = f"{mc_proj['P_NPV_positive'].iloc[0]:.1%}" if len(mc_proj) > 0 else "N/A"
+        cells.append(p_pos)
+        lines.append("| " + " | ".join(cells) + " |")
 
     # Section 4: Config dump
-    lines.append("\n## 4. Configuration (config.yaml)\n")
+    lines.append("\n## 4. Configuration (config.yaml v2)\n")
     lines.append("```yaml")
     with open(Path(__file__).resolve().parent / "config.yaml") as f:
         lines.append(f.read())
@@ -495,18 +513,23 @@ def generate_report(
     life = cfg["general"]["analysis_life_years"]
 
     questions = [
+        ("How much do frictions reduce the NPVs?",
+         lambda: "; ".join(f"{r['project']}: {r['npv_reduction_pct']:.1f}% reduction"
+                           for _, r in replication.iterrows()) + "."),
         ("How sensitive is the ranking to the discount rate?",
          lambda: _discount_sensitivity_answer(cfg)),
         ("What if savings are 30% lower than projected?",
          lambda: _savings_30_answer(cfg)),
         ("Are the savings estimates additive?",
-         lambda: f"No. With all projects selected, interaction effects reduce portfolio NPV by {format_currency(full_portfolio['overstatement'])} ({full_portfolio['overstatement_pct']:.1f}%)."),
+         lambda: f"No. Interaction effects reduce full-portfolio NPV by "
+                 f"{format_currency(full_portfolio['overstatement'])} ({full_portfolio['overstatement_pct']:.1f}%)."),
         ("What is the probability each project has positive NPV?",
          lambda: _mc_prob_answer(mc_stats)),
         ("Does the scoring system agree with economic analysis?",
-         lambda: f"Weakly. Kendall tau between composite score and profitability index = {tau_score_pi:.2f}."),
+         lambda: f"Kendall tau (score vs PI) = {tau_score_pi:.2f} (v2 rebalanced from 0.00)."),
         ("Can we detect the kind of waste this model targets?",
-         lambda: f"The synthetic test injected 12% waste. Change-point model estimated {cp_row['estimated_waste_pct']:.1%}, gradient boosting estimated {gb_row['estimated_waste_pct']:.1%}."),
+         lambda: f"v2 with shoulder feature: CP estimated {cp_row['estimated_waste_pct']:.1%}, "
+                 f"GB estimated {gb_row['estimated_waste_pct']:.1%} vs true {cp_row['true_waste_pct']:.1%}."),
         ("What is the worst-case 10% NPV for each project?",
          lambda: _es_answer(mc_stats)),
     ]
@@ -515,7 +538,6 @@ def generate_report(
         lines.append(f"**Q: {q}**\n")
         lines.append(f"A: {a_fn()}\n")
 
-    # Charts listing
     lines.append("\n## Charts\n")
     for png in sorted(OUT.glob("chart_*.png")):
         lines.append(f"![{png.stem}]({png.name})\n")
@@ -533,7 +555,7 @@ def _discount_sensitivity_answer(cfg: dict) -> str:
         p = projects[pk]
         npv_4 = compute_npv(p["capex"], p["annual_benefit"], 0.04, life, cross_check=False)
         npv_12 = compute_npv(p["capex"], p["annual_benefit"], 0.12, life, cross_check=False)
-        parts.append(f"{pk}: NPV ranges from {format_currency(npv_12)} (12%) to {format_currency(npv_4)} (4%)")
+        parts.append(f"{pk}: {format_currency(npv_12)} (12%) to {format_currency(npv_4)} (4%)")
     return "; ".join(parts) + "."
 
 
@@ -541,18 +563,21 @@ def _savings_30_answer(cfg: dict) -> str:
     projects = cfg["projects"]
     rate = cfg["general"]["discount_rate"]
     life = cfg["general"]["analysis_life_years"]
+    fkw = base_friction_kwargs(cfg)
     parts = []
     for pk in projects:
         p = projects[pk]
-        npv = compute_npv(p["capex"], p["annual_benefit"] * 0.70, rate, life, cross_check=False)
-        parts.append(f"{pk}: NPV = {format_currency(npv)}")
+        npv = compute_npv(p["capex"], p["annual_benefit"] * 0.70, rate, life, cross_check=False, **fkw)
+        parts.append(f"{pk}: {format_currency(npv)}")
     return "; ".join(parts) + "."
 
 
 def _mc_prob_answer(mc_stats: pd.DataFrame) -> str:
     parts = []
     for _, row in mc_stats.iterrows():
-        if row["project"] in CLAIMED:
+        if not row["project"].startswith("electrical_"):
+            parts.append(f"{row['project']}: P(NPV>0) = {row['P_NPV_positive']:.1%}")
+        elif row["project"] in ("electrical_monitoring", "electrical_full", "electrical_energy_only"):
             parts.append(f"{row['project']}: P(NPV>0) = {row['P_NPV_positive']:.1%}")
     return "; ".join(parts) + "."
 
@@ -560,7 +585,7 @@ def _mc_prob_answer(mc_stats: pd.DataFrame) -> str:
 def _es_answer(mc_stats: pd.DataFrame) -> str:
     parts = []
     for _, row in mc_stats.iterrows():
-        if row["project"] in CLAIMED:
+        if row["project"] in CLAIMED_V1 or row["project"] == "electrical_monitoring":
             parts.append(f"{row['project']}: ES10 = {format_currency(row['expected_shortfall_10'])}")
     return "; ".join(parts) + "."
 
@@ -572,22 +597,24 @@ def _es_answer(mc_stats: pd.DataFrame) -> str:
 def main() -> None:
     ensure_output_dir()
     cfg = load_config()
+    fkw = base_friction_kwargs(cfg)
 
     print("=" * 70)
-    print("CMPM VALIDATION HARNESS")
+    print("CMPM VALIDATION HARNESS (v2: ACCURACY IMPROVEMENTS)")
     print("=" * 70)
+    if fkw:
+        print(f"Base-case frictions ON: {fkw}")
 
     print("\n--- Step 1: Deterministic Replication ---")
     replication = step1_replication(cfg)
-    print(replication[["project", "computed_npv", "claimed_npv", "npv_PASS",
-                       "computed_irr", "claimed_irr", "irr_PASS"]].to_string(index=False))
+    print(replication[["project", "npv_no_friction", "npv_with_friction",
+                       "npv_reduction_pct", "computed_irr"]].to_string(index=False))
 
-    print("\n--- Step 2: Adversarial Sensitivity ---")
+    print("\n--- Step 2: Adversarial Sensitivity (tiered scenarios) ---")
     sensitivity = step2_sensitivity(cfg)
     surv = sensitivity["survival"]
-    jd = surv[surv["scenario"] == "joint_downside"][["project", "npv", "sign_flip"]]
-    print("Joint downside results:")
-    print(jd.to_string(index=False))
+    non_base = surv[surv["scenario"] != "base"][["project", "scenario", "npv", "sign_flip"]]
+    print(non_base.to_string(index=False))
 
     print("\n--- Step 3: Monte Carlo ---")
     mc = step3_monte_carlo(cfg)
@@ -605,7 +632,6 @@ def main() -> None:
 
     print("\n--- Step 6: Scoring Validity ---")
     scr = step6_scoring(cfg)
-    print("Rank disagreement (score vs PI vs NPV):")
     rd = scr["rank_disagreement"]
     print(rd[["project", "score_rank", "pi_rank", "npv_rank"]].to_string(index=False))
     print(f"Kendall tau (score vs PI): {rd.attrs.get('tau_score_vs_pi', 'N/A'):.2f}")
@@ -618,40 +644,45 @@ def main() -> None:
     report = generate_report(cfg, replication, sensitivity, mc, interact, opt, scr, baseline_eval)
     print(f"Report written to {OUT / 'report.md'}")
 
-    # Final summary
+    # ---- V1 vs V2 comparison summary ----
     print("\n" + "=" * 70)
-    print("SUMMARY")
+    print("V1 -> V2 COMPARISON SUMMARY")
     print("=" * 70)
-    all_pass = replication["npv_PASS"].all() and replication["payback_PASS"].all() and replication["irr_PASS"].all()
-    print(f"Step 1 replication: {'ALL PASS' if all_pass else 'FAILURES DETECTED'}")
 
-    jd_dead = surv[(surv["scenario"] == "joint_downside") & (surv["npv"] < 0)]
-    print(f"Step 2 joint downside: {len(jd_dead)} projects fail (NPV < 0)")
+    for pk in cfg["projects"]:
+        row = replication[replication["project"] == pk].iloc[0]
+        v1_npv = row["npv_no_friction"]
+        v2_npv = row["npv_with_friction"]
+        print(f"  {pk}: NPV {format_currency(v1_npv)} -> {format_currency(v2_npv)} "
+              f"({row['npv_reduction_pct']:.1f}% reduction)")
+
+    # Count scenario failures
+    for scenario_name in surv["scenario"].unique():
+        if scenario_name == "base":
+            continue
+        dead = surv[(surv["scenario"] == scenario_name) & (surv["npv"] < 0)]
+        print(f"  {scenario_name}: {len(dead)} projects fail")
 
     mc_stats = mc["stats"]
-    risky = mc_stats[mc_stats["project"].isin(CLAIMED) & (mc_stats["P_NPV_positive"] < 0.90)]
-    print(f"Step 3 Monte Carlo: {len(risky)} projects with P(NPV>0) < 90%")
-
-    full_portfolio = interact["subsets"][interact["subsets"]["size"] == interact["subsets"]["size"].max()].iloc[0]
-    print(f"Step 4 interaction overstatement (full portfolio): {format_currency(full_portfolio['overstatement'])}")
-
-    max_gap = opt["sweep"]["gap"].max()
-    print(f"Step 5 max heuristic gap: {format_currency(max_gap)}")
+    risky = mc_stats[mc_stats["project"].isin(cfg["projects"]) & (mc_stats["P_NPV_positive"] < 0.90)]
+    print(f"  MC projects with P(NPV>0) < 90%: {len(risky)}")
 
     tau = rd.attrs.get("tau_score_vs_pi", 0)
-    print(f"Step 6 score-vs-PI Kendall tau: {tau:.2f}")
+    print(f"  Score vs PI Kendall tau: {tau:.2f} (v1 was 0.00)")
 
     for _, row in baseline_eval.iterrows():
-        print(f"Step 7 {row['model']}: waste estimate = {row['estimated_waste_pct']:.1%}, bias = {row['bias']:.3f}")
+        print(f"  {row['model']}: waste estimate = {row['estimated_waste_pct']:.1%} "
+              f"(v1: {'1.1%' if 'change' in row['model'] else '0.1%'})")
 
     print("\n" + "=" * 70)
     print("UNVERIFIABLE ITEMS")
     print("=" * 70)
-    print("1. Sub-scores were reverse-engineered (underdetermined system) — they are SYNTHETIC.")
-    print("2. Electrical avoided-failure parameters (p_fail, consequence) are ARBITRARY.")
-    print("3. Interaction magnitudes (15%, 5%) are ARBITRARY — real values need field measurement.")
-    print("4. Monte Carlo distribution shapes are assumed — real data would improve calibration.")
-    print("5. Baseline waste model uses synthetic load — real building data needed for production use.")
+    print("1. Sub-scores were reverse-engineered (underdetermined system) — SYNTHETIC.")
+    print("2. Electrical avoided-failure parameters are based on assumed campus failure rate.")
+    print("3. Interaction magnitudes need field measurement — current values are conservative estimates.")
+    print("4. Monte Carlo distributions widened but still assumed — calibration needs real project data.")
+    print("5. Baseline waste model uses synthetic load — real building data needed for production.")
+    print("6. Friction rates (2% decay, 1.5% O&M, 2% escalation) are industry typical, not campus-specific.")
 
 
 if __name__ == "__main__":

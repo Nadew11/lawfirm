@@ -12,6 +12,23 @@ from scipy.optimize import brentq
 from cmpm.utils import build_cashflows
 
 
+def base_friction_kwargs(cfg: dict[str, Any]) -> dict[str, float]:
+    """Extract base-case friction kwargs from config.
+
+    Returns empty dict if apply_frictions_in_base is false/missing,
+    otherwise returns the friction kwargs for build_cashflows.
+    """
+    if not cfg.get("apply_frictions_in_base", False):
+        return {}
+    f = cfg.get("frictions", {})
+    return {
+        "escalation_rate": f.get("energy_escalation_rate", 0.0),
+        "savings_decay_rate": f.get("savings_decay_rate", 0.0),
+        "residual_value_pct": f.get("residual_value_pct", 0.0),
+        "om_cost_annual_pct": f.get("om_cost_annual_pct", 0.0),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Core economic functions
 # ---------------------------------------------------------------------------
@@ -244,8 +261,20 @@ def survival_table(
 ) -> pd.DataFrame:
     """Build project x scenario NPV matrix with sign-flip flags.
 
+    Supports flat scenarios {name: {params}} and tiered scenarios
+    {tier_name: {sub_name: {params}}} (e.g. joint_downside.mild/moderate/severe).
     Returns DataFrame with columns: project, scenario, npv, sign_flip.
     """
+    # Flatten nested scenarios
+    flat_scenarios: dict[str, dict] = {}
+    for sname, sdata in scenarios.items():
+        if _is_scenario(sdata):
+            flat_scenarios[sname] = sdata
+        else:
+            for sub_name, sub_data in sdata.items():
+                if isinstance(sub_data, dict) and _is_scenario(sub_data):
+                    flat_scenarios[f"{sname}_{sub_name}"] = sub_data
+
     rows = []
     for pkey, pdata in projects.items():
         base_npv = compute_npv(
@@ -257,7 +286,7 @@ def survival_table(
             "npv": base_npv,
             "sign_flip": False,
         })
-        for sname, scenario in scenarios.items():
+        for sname, scenario in flat_scenarios.items():
             npv = joint_downside_npv(
                 pdata["capex"], pdata["annual_benefit"], rate, life, scenario
             )
@@ -268,6 +297,13 @@ def survival_table(
                 "sign_flip": (npv < 0) != (base_npv < 0),
             })
     return pd.DataFrame(rows)
+
+
+def _is_scenario(d: dict) -> bool:
+    """Check if a dict looks like a scenario (has scenario keys, not nested dicts)."""
+    scenario_keys = {"savings_multiplier", "capex_multiplier", "delay_years",
+                     "savings_decay_rate", "life_years"}
+    return bool(scenario_keys & set(d.keys()))
 
 
 def friction_comparison(

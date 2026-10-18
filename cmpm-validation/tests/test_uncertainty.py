@@ -58,9 +58,10 @@ class TestDistributionShapes:
         draws = generate_correlated_draws(10000, mc["correlation_rho"], 42, mc)
         unique, counts = np.unique(draws["delay_years"], return_counts=True)
         fracs = dict(zip(unique, counts / len(draws["delay_years"])))
-        assert abs(fracs.get(0, 0) - 0.6) < 0.05
-        assert abs(fracs.get(1, 0) - 0.3) < 0.05
-        assert abs(fracs.get(2, 0) - 0.1) < 0.05
+        # v2: {0: 0.40, 1: 0.35, 2: 0.20, 3: 0.05}
+        assert abs(fracs.get(0, 0) - 0.40) < 0.05
+        assert abs(fracs.get(1, 0) - 0.35) < 0.05
+        assert abs(fracs.get(2, 0) - 0.20) < 0.05
 
     def test_discount_rate_bounds(self, cfg):
         mc = cfg["monte_carlo"]

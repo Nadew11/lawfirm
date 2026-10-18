@@ -143,8 +143,20 @@ def gradient_boosting_model(
     Uses time-ordered splits — NO random shuffling.
     """
     baseline_cfg = cfg["baseline"]
-    features = ["outdoor_temp", "hour_of_day", "day_of_week", "occupancy"]
-    X = data[features].values
+    features = ["outdoor_temp", "hour_of_day", "day_of_week", "occupancy", "is_shoulder_flag",
+                "htg_clg_overlap"]
+
+    htg_cp = baseline_cfg["heating_changepoint_f"]
+    clg_cp = baseline_cfg["cooling_changepoint_f"]
+    temp = data["outdoor_temp"].values
+
+    feature_df = data[["outdoor_temp", "hour_of_day", "day_of_week", "occupancy"]].copy()
+    feature_df["is_shoulder_flag"] = data["is_shoulder"].astype(float).values
+    feature_df["htg_clg_overlap"] = (
+        np.maximum(htg_cp - temp, 0) * np.maximum(temp - clg_cp, 0)
+    )
+
+    X = feature_df.values
     y = data["total_load_kw"].values
     n = len(y)
 

@@ -23,26 +23,32 @@ class TestInteractionMatrix:
     def test_parses_config(self, cfg):
         mat = interaction_matrix_from_config(cfg)
         assert ("lab_ventilation", "central_plant") in mat
-        assert mat[("lab_ventilation", "central_plant")] == 0.15
+        assert mat[("lab_ventilation", "central_plant")] == 0.10  # v2: lowered from 0.15
 
     def test_classroom_interaction(self, cfg):
         mat = interaction_matrix_from_config(cfg)
         assert ("classroom_bas", "central_plant") in mat
-        assert mat[("classroom_bas", "central_plant")] == 0.05
+        assert mat[("classroom_bas", "central_plant")] == 0.03  # v2: lowered from 0.05
+
+    def test_new_interactions_present(self, cfg):
+        mat = interaction_matrix_from_config(cfg)
+        assert ("lab_ventilation", "classroom_bas") in mat
+        assert ("dorm_occupancy", "central_plant") in mat
 
 
 class TestAdjustedBenefit:
     def test_no_interaction_unchanged(self, cfg):
         projects = cfg["projects"]
         mat = interaction_matrix_from_config(cfg)
-        ab = adjusted_benefit("dorm_occupancy", ["dorm_occupancy", "lab_ventilation"], projects, mat)
-        assert ab == projects["dorm_occupancy"]["annual_benefit"]
+        # dorm -> lab has no interaction in config
+        ab = adjusted_benefit("lab_ventilation", ["lab_ventilation", "dorm_occupancy"], projects, mat)
+        assert ab == projects["lab_ventilation"]["annual_benefit"]
 
     def test_plant_reduced_by_lab(self, cfg):
         projects = cfg["projects"]
         mat = interaction_matrix_from_config(cfg)
         ab = adjusted_benefit("central_plant", ["central_plant", "lab_ventilation"], projects, mat)
-        expected = projects["central_plant"]["annual_benefit"] * 0.85
+        expected = projects["central_plant"]["annual_benefit"] * 0.90  # v2: 10% reduction
         assert abs(ab - expected) < 1.0
 
     def test_plant_reduced_by_both(self, cfg):
@@ -50,7 +56,7 @@ class TestAdjustedBenefit:
         mat = interaction_matrix_from_config(cfg)
         selected = ["central_plant", "lab_ventilation", "classroom_bas"]
         ab = adjusted_benefit("central_plant", selected, projects, mat)
-        expected = projects["central_plant"]["annual_benefit"] * 0.80  # 15% + 5% = 20%
+        expected = projects["central_plant"]["annual_benefit"] * 0.87  # v2: 10% + 3% = 13%
         assert abs(ab - expected) < 1.0
 
 

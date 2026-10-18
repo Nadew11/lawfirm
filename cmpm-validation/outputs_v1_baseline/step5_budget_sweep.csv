@@ -1,0 +1,24 @@
+budget,optimal_npv,optimal_set,heuristic_npv,heuristic_set,gap,gap_pct
+300000.0,633065.6003212379,lab_ventilation,633065.6003212379,lab_ventilation,0.0,0.0
+400000.0,808890.9542538789,electrical_monitoring,633065.6003212379,lab_ventilation,175825.35393264098,21.736595397438002
+500000.0,874480.492777194,"classroom_bas, lab_ventilation",874480.492777194,"classroom_bas, lab_ventilation",0.0,0.0
+600000.0,1050305.8467098349,"classroom_bas, electrical_monitoring",874480.492777194,"classroom_bas, lab_ventilation",175825.35393264086,16.740395617469666
+700000.0,1441956.5545751168,"electrical_monitoring, lab_ventilation",1040777.4775284871,"classroom_bas, dorm_occupancy, lab_ventilation",401179.07704662974,27.82185605896012
+800000.0,1441956.5545751168,"electrical_monitoring, lab_ventilation",1040777.4775284871,"classroom_bas, dorm_occupancy, lab_ventilation",401179.07704662974,27.82185605896012
+900000.0,1683371.4470310728,"classroom_bas, electrical_monitoring, lab_ventilation",1683371.4470310728,"classroom_bas, electrical_monitoring, lab_ventilation",0.0,0.0
+1000000.0,1683371.4470310728,"classroom_bas, electrical_monitoring, lab_ventilation",1683371.4470310728,"classroom_bas, electrical_monitoring, lab_ventilation",0.0,0.0
+1100000.0,1849668.4317823658,"classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",1849668.4317823658,"classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",0.0,0.0
+1200000.0,1849668.4317823658,"classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",1849668.4317823658,"classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",0.0,0.0
+1300000.0,1849668.4317823658,"classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",1849668.4317823658,"classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",0.0,0.0
+1400000.0,1849668.431782366,"classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",1849668.4317823658,"classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",2.3283064365386963e-10,1.2587696240753311e-14
+1500000.0,1849668.4317823658,"classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",1403180.2225528322,"central_plant, lab_ventilation",446488.20922953356,24.13882410261451
+1600000.0,1926672.8627616367,"central_plant, electrical_monitoring",1403180.2225528322,"central_plant, lab_ventilation",523492.6402088045,27.170810900323026
+1700000.0,1926672.8627616367,"central_plant, electrical_monitoring",1528706.0195834003,"central_plant, classroom_bas, lab_ventilation",397966.8431782364,20.655652076180818
+1800000.0,2092969.8475129297,"central_plant, dorm_occupancy, electrical_monitoring",1528706.0195834003,"central_plant, classroom_bas, lab_ventilation",564263.8279295294,26.959959724218795
+1900000.0,2212071.1768067107,"central_plant, electrical_monitoring, lab_ventilation",1695003.0043346933,"central_plant, classroom_bas, dorm_occupancy, lab_ventilation",517068.17247201735,23.374843354653883
+2000000.0,2218495.644543498,"central_plant, classroom_bas, dorm_occupancy, electrical_monitoring",1695003.0043346933,"central_plant, classroom_bas, dorm_occupancy, lab_ventilation",523492.6402088045,23.596739596778615
+2100000.0,2378368.1615580036,"central_plant, dorm_occupancy, electrical_monitoring, lab_ventilation",2337596.9738372792,"central_plant, classroom_bas, electrical_monitoring, lab_ventilation",40771.18772072438,1.714250483996401
+2200000.0,2378368.1615580036,"central_plant, dorm_occupancy, electrical_monitoring, lab_ventilation",2337596.9738372792,"central_plant, classroom_bas, electrical_monitoring, lab_ventilation",40771.18772072438,1.714250483996401
+2300000.0,2503893.9585885718,"central_plant, classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",2503893.958588572,"central_plant, classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",-4.656612873077393e-10,-1.8597484358731767e-14
+2400000.0,2503893.9585885718,"central_plant, classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",2503893.958588572,"central_plant, classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",-4.656612873077393e-10,-1.8597484358731767e-14
+2500000.0,2503893.9585885718,"central_plant, classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",2503893.958588572,"central_plant, classroom_bas, dorm_occupancy, electrical_monitoring, lab_ventilation",-4.656612873077393e-10,-1.8597484358731767e-14
