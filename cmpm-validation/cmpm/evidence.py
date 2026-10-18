@@ -28,10 +28,9 @@ import pandas as pd
 def generate_utility_bills(cfg: dict[str, Any], seed: int | None = None) -> pd.DataFrame:
     """SYNTHETIC 24-month utility data for each building.
 
-    Generates monthly energy consumption with seasonal patterns,
-    a known baseline, and an embedded inefficiency that the project
-    is supposed to address.  Waste kWh is calibrated from config
-    annual_benefit so cross-checks are meaningful.
+    Waste kWh is generated from INDEPENDENT building-physics estimates
+    (floor area * EUI * addressable fraction), NOT derived from config
+    annual_benefit, so the cross-check against config is a genuine test.
     """
     if seed is None:
         seed = cfg["general"]["random_seed"]
@@ -39,41 +38,60 @@ def generate_utility_bills(cfg: dict[str, Any], seed: int | None = None) -> pd.D
 
     cost_per_kwh = 0.12  # $/kWh — ARBITRARY, typical institutional rate
 
+    # Independent building parameters: floor area (sf) and addressable %
+    # These are NOT derived from config benefits — they represent what
+    # a utility bill auditor would estimate independently.
     buildings = {
         "lab_ventilation": {
             "base_monthly_kwh": 85_000,
             "seasonal_amplitude": 25_000,
             "noise_std": 5_000,
+            "floor_area_sf": 45_000,
+            "eui_kwh_per_sf": 30,
+            "addressable_pct": 0.08,
         },
         "central_plant": {
             "base_monthly_kwh": 400_000,
             "seasonal_amplitude": 150_000,
             "noise_std": 20_000,
+            "floor_area_sf": 250_000,
+            "eui_kwh_per_sf": 22,
+            "addressable_pct": 0.05,
         },
         "classroom_bas": {
             "base_monthly_kwh": 50_000,
             "seasonal_amplitude": 15_000,
             "noise_std": 3_000,
+            "floor_area_sf": 30_000,
+            "eui_kwh_per_sf": 25,
+            "addressable_pct": 0.07,
         },
         "electrical_monitoring": {
             "base_monthly_kwh": 60_000,
             "seasonal_amplitude": 10_000,
             "noise_std": 4_000,
+            "floor_area_sf": 35_000,
+            "eui_kwh_per_sf": 28,
+            "addressable_pct": 0.06,
         },
         "dorm_occupancy": {
             "base_monthly_kwh": 45_000,
             "seasonal_amplitude": 12_000,
             "noise_std": 3_000,
+            "floor_area_sf": 40_000,
+            "eui_kwh_per_sf": 18,
+            "addressable_pct": 0.06,
         },
     }
 
     rows = []
     for bldg_key, params in buildings.items():
-        proj = cfg["projects"].get(bldg_key, {})
-        annual_benefit = proj.get("annual_benefit", 50_000)
-        # Scale waste to ~80-120% of claimed benefit (realistic M&V scatter)
-        # so cross-checks show realistic ratios
-        waste_kwh_monthly = round(annual_benefit / (cost_per_kwh * 12) * rng.uniform(0.85, 1.15))
+        # Waste derived from independent building-physics estimate + noise
+        annual_kwh = params["floor_area_sf"] * params["eui_kwh_per_sf"]
+        addressable_kwh = annual_kwh * params["addressable_pct"]
+        # Add ±20% uncertainty from audit methodology
+        addressable_kwh *= rng.uniform(0.80, 1.20)
+        waste_kwh_monthly = round(addressable_kwh / 12)
 
         for month_offset in range(24):
             month_num = (month_offset % 12) + 1
@@ -132,13 +150,18 @@ def validate_benefits_against_bills(
 def generate_mv_comparison(cfg: dict[str, Any], seed: int | None = None) -> pd.DataFrame:
     """SYNTHETIC M&V results from 20 'comparable' completed projects.
 
-    Shows actual-vs-predicted savings ratios.  This is the single most
-    important calibration dataset — it tells you how much to trust
-    engineering savings estimates.
+    Generation parameters come from config (mv_evidence section) when
+    present, otherwise uses literature defaults.  The calibration step
+    can then compare what the config ASSUMED vs what the M&V data shows.
     """
     if seed is None:
         seed = cfg["general"]["random_seed"]
     rng = np.random.default_rng(seed + 800)
+
+    mv_cfg = cfg.get("mv_evidence", {})
+    ratio_mean = mv_cfg.get("actual_predicted_ratio_mean", 0.82)
+    ratio_std = mv_cfg.get("actual_predicted_ratio_std", 0.18)
+    n_peers = mv_cfg.get("n_peer_projects", 20)
 
     project_types = [
         "lab_ventilation", "central_plant", "classroom_bas",
@@ -146,14 +169,12 @@ def generate_mv_comparison(cfg: dict[str, Any], seed: int | None = None) -> pd.D
     ]
 
     rows = []
-    for i in range(20):
+    for i in range(n_peers):
         ptype = project_types[i % len(project_types)]
         predicted_savings = rng.uniform(40_000, 400_000)
 
-        # Actual savings are typically 60-110% of predicted
-        # (performance gap literature: median ~85%, std ~15%)
-        actual_ratio = rng.normal(0.85, 0.15)
-        actual_ratio = max(actual_ratio, 0.30)
+        actual_ratio = rng.normal(ratio_mean, ratio_std)
+        actual_ratio = max(actual_ratio, 0.20)
         actual_savings = predicted_savings * actual_ratio
 
         rows.append({
@@ -269,20 +290,23 @@ def analyze_maintenance_evidence(records: pd.DataFrame) -> dict[str, Any]:
 def generate_interaction_analysis(cfg: dict[str, Any], seed: int | None = None) -> pd.DataFrame:
     """SYNTHETIC engineering analysis of system-level savings overlap.
 
-    Simulates what an engineer would produce by modeling building
-    systems and measuring how much each ECM reduces the baseline
-    available to other ECMs.
+    Estimates interaction magnitudes from INDEPENDENT load-fraction
+    analysis (each project's share of total campus load), NOT from
+    config interaction values.  The comparison between these engineering
+    estimates and the config assumptions is a genuine cross-check.
     """
     if seed is None:
         seed = cfg["general"]["random_seed"]
     rng = np.random.default_rng(seed + 1100)
+
+    projects = cfg["projects"]
+    total_benefit = sum(p["annual_benefit"] for p in projects.values())
 
     interactions = [
         {
             "source": "lab_ventilation",
             "target": "central_plant",
             "mechanism": "Reduced airflow lowers cooling load at central plant",
-            "modeled_reduction_pct": 0.08 + rng.normal(0, 0.02),
             "confidence": "medium",
             "measurement_method": "Calibrated energy model simulation",
         },
@@ -290,14 +314,13 @@ def generate_interaction_analysis(cfg: dict[str, Any], seed: int | None = None) 
             "source": "classroom_bas",
             "target": "central_plant",
             "mechanism": "Scheduling reduces occupied-hours cooling demand",
-            "modeled_reduction_pct": 0.03 + rng.normal(0, 0.01),
             "confidence": "medium",
+            "measurement_method": "Engineering estimate",
         },
         {
             "source": "lab_ventilation",
             "target": "classroom_bas",
             "mechanism": "Shared AHU: improved lab controls affect classroom zones",
-            "modeled_reduction_pct": 0.04 + rng.normal(0, 0.01),
             "confidence": "low",
             "measurement_method": "Engineering estimate, no model",
         },
@@ -305,15 +328,25 @@ def generate_interaction_analysis(cfg: dict[str, Any], seed: int | None = None) 
             "source": "dorm_occupancy",
             "target": "central_plant",
             "mechanism": "Reduced dorm load slightly reduces central plant output",
-            "modeled_reduction_pct": 0.02 + rng.normal(0, 0.005),
             "confidence": "low",
             "measurement_method": "Proportional to load fraction",
         },
     ]
 
     for row in interactions:
-        row["modeled_reduction_pct"] = round(max(row["modeled_reduction_pct"], 0.005), 4)
-        row.setdefault("measurement_method", "Engineering estimate")
+        src = row["source"]
+        tgt = row["target"]
+        # Load-fraction approach: interaction ~ source_benefit / target_benefit * coupling_factor
+        # coupling_factor reflects physical proximity and system overlap
+        src_benefit = projects.get(src, {}).get("annual_benefit", 50_000)
+        tgt_benefit = projects.get(tgt, {}).get("annual_benefit", 50_000)
+        load_fraction = src_benefit / tgt_benefit if tgt_benefit > 0 else 0
+
+        coupling = {"medium": 0.20, "low": 0.10}.get(row["confidence"], 0.15)
+        base_reduction = load_fraction * coupling
+        # Add engineering uncertainty ±30%
+        modeled = base_reduction * rng.uniform(0.70, 1.30)
+        row["modeled_reduction_pct"] = round(max(modeled, 0.005), 4)
 
     return pd.DataFrame(interactions)
 
@@ -325,9 +358,9 @@ def generate_interaction_analysis(cfg: dict[str, Any], seed: int | None = None) 
 def generate_submetered_data(cfg: dict[str, Any], seed: int | None = None) -> pd.DataFrame:
     """SYNTHETIC submetered heating and cooling data (hourly, 1 year).
 
-    Unlike whole-building load, submetering SEPARATES heating and cooling
-    energy.  Simultaneous operation is directly observable as hours where
-    both heating > 0 and cooling > 0.
+    Uses an INDEPENDENT waste estimate from field observation (default 10%)
+    rather than the config baseline waste_fraction, so the comparison
+    between submeter findings and config assumptions is a genuine test.
     """
     if seed is None:
         seed = cfg["general"]["random_seed"]
@@ -352,14 +385,16 @@ def generate_submetered_data(cfg: dict[str, Any], seed: int | None = None) -> pd
     heating_kw = np.maximum(htg_cp - outdoor_temp, 0) * baseline_cfg["heating_slope"] * 0.5
     cooling_kw = np.maximum(outdoor_temp - clg_cp, 0) * baseline_cfg["cooling_slope"] * 0.5
 
-    # Injected waste: simultaneous heating + cooling in shoulder season
-    waste_frac = baseline_cfg["injected_waste_fraction"]
+    # Independent waste fraction: field-observed estimate, NOT from config
+    # Default 10% is typical for campuses with simultaneous H+C problems
+    submeter_cfg = cfg.get("submeter_evidence", {})
+    field_waste_frac = submeter_cfg.get("field_observed_waste_fraction", 0.10)
     is_shoulder = (outdoor_temp >= htg_cp - 5) & (outdoor_temp <= clg_cp + 5)
 
     waste_heating = np.zeros(n_hours)
     waste_cooling = np.zeros(n_hours)
-    waste_heating[is_shoulder] = waste_frac * 200
-    waste_cooling[is_shoulder] = waste_frac * 200
+    waste_heating[is_shoulder] = field_waste_frac * 200
+    waste_cooling[is_shoulder] = field_waste_frac * 200
 
     total_heating = heating_kw + waste_heating + rng.normal(0, 5, n_hours)
     total_cooling = cooling_kw + waste_cooling + rng.normal(0, 5, n_hours)

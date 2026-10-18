@@ -172,39 +172,55 @@ def normalization_sensitivity(
 def correlation_double_counting(
     cfg: dict[str, Any],
 ) -> dict[str, Any]:
-    """Generate synthetic 200-building population and check for weight double-counting.
+    """Check for weight double-counting using TWO approaches:
 
-    Uses PCA and variance inflation to assess how correlated sub-scores
-    inflate the effective weight of certain criteria.
+    1. Actual project sub-scores (honest but small n=5)
+    2. Synthetic population with config-observed correlations (larger n for PCA)
+
+    The synthetic population's covariance is estimated FROM the 5 actual
+    projects, not hardcoded, so the analysis reflects the real data.
     """
     seed = cfg["scoring"].get("normalization_seed", 123)
     rng = np.random.default_rng(seed + 300)
-    n_buildings = cfg["scoring"]["synthetic_population_200"]
     weight_keys = list(cfg["score_weights"].keys())
     n_crit = len(weight_keys)
     weights = np.array([cfg["score_weights"][k] for k in weight_keys])
 
-    cov_matrix = np.eye(n_crit)
-    cov_matrix[0, 1] = 0.6  # financial ~ recoverable_inefficiency
-    cov_matrix[1, 0] = 0.6
-    cov_matrix[0, 3] = 0.3  # financial ~ operational_importance
-    cov_matrix[3, 0] = 0.3
-    means = np.full(n_crit, 60.0)
-    raw = rng.multivariate_normal(means, cov_matrix * 200, size=n_buildings)
+    # Build actual sub-score matrix from the 5 projects
+    proj_keys = list(cfg["projects"].keys())
+    actual_scores = np.array([
+        [cfg["projects"][pk]["sub_scores"][k] for k in weight_keys]
+        for pk in proj_keys
+    ])
+
+    # Correlation from actual data (small sample, but honest)
+    if actual_scores.shape[0] >= 3:
+        actual_corr = np.corrcoef(actual_scores, rowvar=False)
+    else:
+        actual_corr = np.eye(n_crit)
+    actual_corr_df = pd.DataFrame(actual_corr, index=weight_keys, columns=weight_keys)
+
+    # Generate synthetic population using OBSERVED correlations
+    n_buildings = cfg["scoring"]["synthetic_population_200"]
+    actual_cov = np.cov(actual_scores, rowvar=False) if actual_scores.shape[0] >= 3 else np.eye(n_crit) * 200
+    means = np.mean(actual_scores, axis=0) if actual_scores.shape[0] >= 2 else np.full(n_crit, 60.0)
+    raw = rng.multivariate_normal(means, actual_cov, size=n_buildings)
     raw = np.clip(raw, 0, 100)
 
-    corr = np.corrcoef(raw, rowvar=False)
-    corr_df = pd.DataFrame(corr, index=weight_keys, columns=weight_keys)
+    synth_corr = np.corrcoef(raw, rowvar=False) if raw.shape[0] > n_crit else actual_corr
 
     from sklearn.decomposition import PCA
     pca = PCA()
     pca.fit(raw)
     explained = pca.explained_variance_ratio_
 
-    # Variance Inflation Factor
+    # VIF from actual project correlations
     from numpy.linalg import inv
-    corr_inv = inv(corr)
-    vif = np.diag(corr_inv)
+    try:
+        corr_inv = inv(actual_corr)
+        vif = np.diag(corr_inv)
+    except np.linalg.LinAlgError:
+        vif = np.ones(n_crit)
 
     effective_weights = weights * vif / np.sum(weights * vif)
 
@@ -217,9 +233,10 @@ def correlation_double_counting(
     })
 
     return {
-        "correlation_matrix": corr_df,
+        "correlation_matrix": actual_corr_df,
         "pca_explained_variance": explained.tolist(),
         "vif_summary": summary,
+        "n_actual_projects": len(proj_keys),
     }
 
 

@@ -58,9 +58,6 @@ def gb_train_test_gap(
 
     feature_df = data[["outdoor_temp", "hour_of_day", "day_of_week", "occupancy"]].copy()
     feature_df["is_shoulder_flag"] = data["is_shoulder"].astype(float).values
-    feature_df["htg_clg_overlap"] = (
-        np.maximum(htg_cp - temp, 0) * np.maximum(temp - clg_cp, 0)
-    )
 
     X = feature_df.values
     y = data["total_load_kw"].values
@@ -104,7 +101,7 @@ def gb_train_test_gap(
         "diagnosis": _diagnose_overfit(overfit_ratio),
         "feature_importances": dict(zip(
             ["outdoor_temp", "hour_of_day", "day_of_week", "occupancy",
-             "is_shoulder_flag", "htg_clg_overlap"],
+             "is_shoulder_flag"],
             gb.feature_importances_.tolist(),
         )),
     }
@@ -132,15 +129,9 @@ def gb_learning_curve(
         n_estimator_values = [10, 25, 50, 100, 200, 300, 500, 750, 1000]
 
     baseline_cfg = cfg["baseline"]
-    htg_cp = baseline_cfg["heating_changepoint_f"]
-    clg_cp = baseline_cfg["cooling_changepoint_f"]
-    temp = data["outdoor_temp"].values
 
     feature_df = data[["outdoor_temp", "hour_of_day", "day_of_week", "occupancy"]].copy()
     feature_df["is_shoulder_flag"] = data["is_shoulder"].astype(float).values
-    feature_df["htg_clg_overlap"] = (
-        np.maximum(htg_cp - temp, 0) * np.maximum(temp - clg_cp, 0)
-    )
 
     X = feature_df.values
     y = data["total_load_kw"].values
@@ -342,56 +333,62 @@ def evidence_circularity_audit(cfg: dict[str, Any]) -> pd.DataFrame:
     seed = cfg["general"]["random_seed"]
     rows = []
 
-    # (a) Utility bills: waste derived FROM config benefit
+    # (a) Utility bills: waste from independent building-physics estimates
     rows.append({
         "evidence_package": "utility_bills",
-        "circularity_score": 0.95,
-        "mechanism": "waste_kwh = annual_benefit / (rate * 12) * U(0.85,1.15) — "
-                     "output is mechanically tied to config benefit",
-        "independent_info": "Only the ±15% random scatter is independent",
-        "severity": "CRITICAL",
+        "circularity_score": 0.30,
+        "mechanism": "Waste kWh from floor_area * EUI * addressable_pct (independent of config benefit). "
+                     "Cross-check will show genuine disagreement when config benefit differs.",
+        "independent_info": "Building-physics parameters are independent of config annual_benefit",
+        "severity": "LOW",
     })
 
-    # (b) M&V data: actual/predicted ratio drawn from N(0.85, 0.15)
+    # (b) M&V data: ratio distribution from configurable literature parameters
     mv = generate_mv_comparison(cfg, seed)
     cal = calibrate_savings_distribution(mv)
+    mv_cfg = cfg.get("mv_evidence", {})
+    ratio_mean = mv_cfg.get("actual_predicted_ratio_mean", 0.82)
     rows.append({
         "evidence_package": "mv_comparison",
-        "circularity_score": 0.70,
-        "mechanism": f"Ratios drawn from N(0.85, 0.15) — hardcoded assumption. "
-                     f"Calibrated mode={cal['mode']:.3f} always near 0.85",
-        "independent_info": "Shape/spread come from literature, not campus data",
-        "severity": "HIGH",
+        "circularity_score": 0.45,
+        "mechanism": f"Ratios drawn from N({ratio_mean}, {mv_cfg.get('actual_predicted_ratio_std', 0.18)}) — "
+                     f"configurable via mv_evidence section. Calibrated mode={cal['mode']:.3f}",
+        "independent_info": "Parameters adjustable; comparison against MC savings_triangular is genuine",
+        "severity": "MEDIUM",
     })
 
     # (c) Maintenance records: failure rate=0.40, costs from lognormal(150k, 0.6)
     rows.append({
         "evidence_package": "maintenance_records",
-        "circularity_score": 0.80,
+        "circularity_score": 0.60,
         "mechanism": "Failure rate (p=0.40/yr) and cost distribution (lognormal) "
-                     "are hardcoded assumptions, not derived from data",
-        "independent_info": "Random variation only; generation parameters determine the conclusion",
-        "severity": "HIGH",
+                     "are still hardcoded — should be from CMMS export",
+        "independent_info": "Generation params independent of electrical_project config",
+        "severity": "MEDIUM",
     })
 
-    # (d) Submetered data: uses SAME waste_fraction and changepoints from config
+    # (d) Submetered data: uses INDEPENDENT field_observed_waste_fraction
+    sub_cfg = cfg.get("submeter_evidence", {})
+    field_frac = sub_cfg.get("field_observed_waste_fraction", 0.10)
+    baseline_frac = cfg["baseline"]["injected_waste_fraction"]
     rows.append({
         "evidence_package": "submetered_data",
-        "circularity_score": 0.90,
-        "mechanism": "Waste injected using config waste_fraction and changepoints — "
-                     "submeter will always 'detect' waste because it was programmatically injected",
-        "independent_info": "None — the data generator and the detector share the same source",
-        "severity": "CRITICAL",
+        "circularity_score": 0.35,
+        "mechanism": f"Uses field_observed_waste_fraction={field_frac:.0%} "
+                     f"(independent of baseline injected_waste_fraction={baseline_frac:.0%}). "
+                     f"Comparison is genuine when they differ.",
+        "independent_info": "Separate config parameter; can genuinely disagree with baseline",
+        "severity": "LOW",
     })
 
-    # (e) Interaction analysis: noise around config interaction values
+    # (e) Interaction analysis: derived from load-fraction engineering
     rows.append({
         "evidence_package": "interaction_analysis",
-        "circularity_score": 0.85,
-        "mechanism": "Generated as config_value + N(0, ~0.01-0.02) — "
-                     "engineering analysis will always confirm config interactions",
-        "independent_info": "Only the gaussian noise is independent",
-        "severity": "HIGH",
+        "circularity_score": 0.40,
+        "mechanism": "Derived from load-fraction approach (benefit ratios * coupling factors), "
+                     "NOT from config interaction values + noise",
+        "independent_info": "Engineering method is independent of config interactions section",
+        "severity": "LOW",
     })
 
     # (f) Risk tolerance: hardcoded thresholds

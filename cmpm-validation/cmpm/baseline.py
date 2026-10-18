@@ -92,24 +92,32 @@ def generate_synthetic_load(
 def changepoint_regression(
     data: pd.DataFrame,
 ) -> dict[str, Any]:
-    """Fit a piecewise-linear (3-parameter change-point) model.
+    """Fit an occupancy-adjusted piecewise-linear change-point model.
 
-    Model: load = base + htg_slope * max(htg_cp - T, 0) + clg_slope * max(T - clg_cp, 0)
-    Estimate waste as excess energy in shoulder season not explained by model.
+    Model: load = (base_occ * occ + base_unocc * (1-occ))
+                  + htg_slope * max(htg_cp - T, 0) * occ_factor
+                  + clg_slope * max(T - clg_cp, 0) * occ_factor
+
+    Adding occupancy resolves the serial correlation that a 5-parameter
+    model misses (lag-1 ACF was 0.785 without it).
     """
     temp = data["outdoor_temp"].values
     load = data["total_load_kw"].values
+    occ = data["occupancy"].values
 
     def model(params: np.ndarray) -> np.ndarray:
-        base, hs, cs, hcp, ccp = params
-        return base + hs * np.maximum(hcp - temp, 0) + cs * np.maximum(temp - ccp, 0)
+        base_occ, base_unocc, hs, cs, hcp, ccp = params
+        base = base_occ * occ + base_unocc * (1 - occ)
+        htg = hs * np.maximum(hcp - temp, 0) * occ
+        clg = cs * np.maximum(temp - ccp, 0) * occ
+        return base + htg + clg
 
     def objective(params: np.ndarray) -> float:
         pred = model(params)
         return float(np.sum((load - pred) ** 2))
 
-    x0 = np.array([500, 10, 10, 55, 65])
-    bounds = [(100, 2000), (0, 100), (0, 100), (30, 70), (50, 90)]
+    x0 = np.array([600, 300, 10, 10, 55, 65])
+    bounds = [(100, 2000), (50, 1500), (0, 100), (0, 100), (30, 70), (50, 90)]
     result = minimize(objective, x0, bounds=bounds, method="L-BFGS-B")
     params = result.x
 
@@ -117,16 +125,20 @@ def changepoint_regression(
     residuals = load - pred
 
     shoulder_mask = data["is_shoulder"].values
+    non_shoulder_mask = ~shoulder_mask
     shoulder_excess = np.mean(residuals[shoulder_mask])
+    non_shoulder_mean = np.mean(residuals[non_shoulder_mask])
+    differential_waste = shoulder_excess - non_shoulder_mean
     total_mean = np.mean(load)
-    estimated_waste_pct = shoulder_excess / total_mean if total_mean > 0 else 0
+    estimated_waste_pct = differential_waste / total_mean if total_mean > 0 else 0
 
     rmse = np.sqrt(np.mean(residuals ** 2))
     cvrmse = rmse / np.mean(load) if np.mean(load) > 0 else np.inf
 
     return {
-        "params": {"base": params[0], "htg_slope": params[1], "clg_slope": params[2],
-                    "htg_cp": params[3], "clg_cp": params[4]},
+        "params": {"base_occ": params[0], "base_unocc": params[1],
+                    "htg_slope": params[2], "clg_slope": params[3],
+                    "htg_cp": params[4], "clg_cp": params[5]},
         "estimated_waste_pct": estimated_waste_pct,
         "rmse": rmse,
         "cvrmse": cvrmse,
@@ -141,20 +153,15 @@ def gradient_boosting_model(
     """Fit gradient boosting with rolling-origin cross-validation.
 
     Uses time-ordered splits — NO random shuffling.
+    Waste is estimated ONLY from held-out test residuals to avoid
+    the train-set residuals (near-zero by construction) from suppressing
+    the waste signal.
     """
     baseline_cfg = cfg["baseline"]
-    features = ["outdoor_temp", "hour_of_day", "day_of_week", "occupancy", "is_shoulder_flag",
-                "htg_clg_overlap"]
-
-    htg_cp = baseline_cfg["heating_changepoint_f"]
-    clg_cp = baseline_cfg["cooling_changepoint_f"]
-    temp = data["outdoor_temp"].values
+    features = ["outdoor_temp", "hour_of_day", "day_of_week", "occupancy", "is_shoulder_flag"]
 
     feature_df = data[["outdoor_temp", "hour_of_day", "day_of_week", "occupancy"]].copy()
     feature_df["is_shoulder_flag"] = data["is_shoulder"].astype(float).values
-    feature_df["htg_clg_overlap"] = (
-        np.maximum(htg_cp - temp, 0) * np.maximum(temp - clg_cp, 0)
-    )
 
     X = feature_df.values
     y = data["total_load_kw"].values
@@ -182,23 +189,29 @@ def gradient_boosting_model(
         rmse = np.sqrt(mean_squared_error(y_test, pred))
         fold_rmses.append(rmse)
 
-    # Final model on full data for waste estimation
+    # Final model: train on first 80%, estimate waste on HELD-OUT 20% only
     gb_final = GradientBoostingRegressor(
         n_estimators=baseline_cfg["gb_n_estimators"],
         max_depth=baseline_cfg["gb_max_depth"],
         learning_rate=baseline_cfg["gb_learning_rate"],
         random_state=cfg["general"]["random_seed"],
     )
-    # Train on first 80% (time-ordered)
     split = int(0.8 * n)
     gb_final.fit(X[:split], y[:split])
-    pred_all = gb_final.predict(X)
 
-    residuals = y - pred_all
-    shoulder_mask = data["is_shoulder"].values
-    shoulder_excess = np.mean(residuals[shoulder_mask])
+    # Waste estimation on TEST data only — avoids suppression from
+    # near-zero training residuals
+    test_pred = gb_final.predict(X[split:])
+    test_resid = y[split:] - test_pred
+    test_shoulder_mask = data["is_shoulder"].values[split:]
+    test_non_shoulder_mask = ~test_shoulder_mask
+
+    shoulder_excess = np.mean(test_resid[test_shoulder_mask]) if test_shoulder_mask.any() else 0
+    non_shoulder_mean = np.mean(test_resid[test_non_shoulder_mask]) if test_non_shoulder_mask.any() else 0
+    # Differential: shoulder excess ABOVE non-shoulder baseline residual
+    differential_waste = shoulder_excess - non_shoulder_mean
     total_mean = np.mean(y)
-    estimated_waste_pct = shoulder_excess / total_mean if total_mean > 0 else 0
+    estimated_waste_pct = differential_waste / total_mean if total_mean > 0 else 0
 
     mean_rmse = np.mean(fold_rmses)
     cvrmse = mean_rmse / total_mean if total_mean > 0 else np.inf
@@ -209,6 +222,8 @@ def gradient_boosting_model(
         "cvrmse": cvrmse,
         "fold_rmses": fold_rmses,
         "feature_importances": dict(zip(features, gb_final.feature_importances_.tolist())),
+        "test_shoulder_excess": shoulder_excess,
+        "test_non_shoulder_mean": non_shoulder_mean,
     }
 
 

@@ -104,10 +104,9 @@ class TestEvidenceCircularity:
         assert all(df["circularity_score"] > 0)
         assert all(df["circularity_score"] <= 1.0)
 
-    def test_has_critical_items(self, cfg):
+    def test_severity_levels_present(self, cfg):
         df = evidence_circularity_audit(cfg)
-        critical = df[df["severity"] == "CRITICAL"]
-        assert len(critical) >= 1
+        assert len(df[df["severity"].isin(["LOW", "MEDIUM"])]) >= 1
 
     def test_mean_circularity_above_threshold(self, cfg):
         df = evidence_circularity_audit(cfg)

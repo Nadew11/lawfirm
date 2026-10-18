@@ -196,8 +196,17 @@ baseline:
   cooling_changepoint_f: 65.0             # ARBITRARY
   noise_std_kw: 15.0                      # REDUCED from 30: less noise makes waste more detectable
   occupancy_multiplier: 1.25              # ARBITRARY
-  gb_n_estimators: 500                    # INCREASED from 200
-  gb_max_depth: 7                         # INCREASED from 5
-  gb_learning_rate: 0.03                  # LOWERED from 0.05: slower, better generalization
+  gb_n_estimators: 200                    # REDUCED from 500: learning curve shows gap widens past 200
+  gb_max_depth: 5                         # REDUCED from 7: less overfitting
+  gb_learning_rate: 0.05                  # INCREASED from 0.03: fewer trees need faster learning
   rolling_origin_min_train_days: 180
   rolling_origin_step_days: 30
+
+# ---- Evidence generation parameters (independent of model assumptions) ----
+mv_evidence:
+  actual_predicted_ratio_mean: 0.82       # Literature: performance gap median
+  actual_predicted_ratio_std: 0.18        # Literature: typical spread
+  n_peer_projects: 20
+
+submeter_evidence:
+  field_observed_waste_fraction: 0.10     # Independent field observation estimate
