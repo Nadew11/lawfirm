@@ -1,0 +1,10 @@
+building,timestamp,heating_kw,cooling_kw,lighting_kw,plug_load_kw,outdoor_temp_f
+lab_ventilation,2024-01-01 00:00,120.5,0.0,12.3,45.2,28.5
+lab_ventilation,2024-01-01 01:00,118.2,0.0,12.1,44.8,27.9
+lab_ventilation,2024-01-01 02:00,122.0,0.0,12.0,44.5,27.2
+lab_ventilation,2024-01-01 07:00,185.3,0.0,48.5,82.1,26.5
+lab_ventilation,2024-01-01 08:00,195.0,0.0,52.0,95.3,27.8
+lab_ventilation,2024-04-15 10:00,45.2,38.5,52.0,95.3,58.2
+lab_ventilation,2024-04-15 11:00,42.8,42.1,52.0,96.1,60.5
+lab_ventilation,2024-07-15 14:00,0.0,285.3,52.0,98.2,92.1
+lab_ventilation,2024-07-15 15:00,0.0,290.1,52.0,97.5,93.5
