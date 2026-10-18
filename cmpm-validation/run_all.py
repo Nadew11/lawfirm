@@ -55,6 +55,13 @@ from cmpm.baseline import (
     evaluate_waste_recovery,
     generate_synthetic_load,
 )
+from cmpm.evidence import (
+    calibrate_config_from_evidence,
+    evidence_comparison_table,
+    generate_all_evidence,
+    generate_decision_rules,
+    risk_tolerance_assessment,
+)
 from cmpm.utils import format_currency, format_pct
 
 OUT = Path(__file__).resolve().parent / "outputs"
@@ -358,6 +365,42 @@ def step7_baseline(cfg: dict) -> pd.DataFrame:
 
 
 # =========================================================================
+# Evidence Generation & Calibration
+# =========================================================================
+
+def step_evidence(cfg: dict, mc_stats: pd.DataFrame) -> dict[str, Any]:
+    """Generate all evidence packages, calibrate v3 config, run risk assessment."""
+    evidence = generate_all_evidence(cfg)
+
+    evidence["utility_bills"].to_csv(OUT / "evidence_utility_bills.csv", index=False)
+    evidence["bill_validation"].to_csv(OUT / "evidence_bill_validation.csv", index=False)
+    evidence["mv_data"].to_csv(OUT / "evidence_mv_data.csv", index=False)
+    evidence["maintenance_records"].to_csv(OUT / "evidence_maintenance_records.csv", index=False)
+    evidence["interaction_engineering"].to_csv(OUT / "evidence_interaction_analysis.csv", index=False)
+
+    submeter_summary = evidence["submetered_data"].describe()
+    submeter_summary.to_csv(OUT / "evidence_submeter_summary.csv")
+
+    risk_df = risk_tolerance_assessment(cfg, mc_stats)
+    risk_df.to_csv(OUT / "evidence_risk_tolerance.csv", index=False)
+
+    cfg_v3 = calibrate_config_from_evidence(cfg, evidence)
+    comparison = evidence_comparison_table(cfg, cfg_v3, evidence)
+    comparison.to_csv(OUT / "evidence_v2_v3_comparison.csv", index=False)
+
+    decisions = generate_decision_rules(risk_df, evidence)
+    decisions.to_csv(OUT / "evidence_decision_rules.csv", index=False)
+
+    return {
+        "evidence": evidence,
+        "risk": risk_df,
+        "cfg_v3": cfg_v3,
+        "comparison": comparison,
+        "decisions": decisions,
+    }
+
+
+# =========================================================================
 # Step 8: Report
 # =========================================================================
 
@@ -370,6 +413,7 @@ def generate_report(
     optimization: dict,
     scoring: dict,
     baseline_eval: pd.DataFrame,
+    evidence_result: dict[str, Any] | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append("# CMPM Validation Harness — Report (v2: Accuracy Improvements)\n")
@@ -499,6 +543,86 @@ def generate_report(
         p_pos = f"{mc_proj['P_NPV_positive'].iloc[0]:.1%}" if len(mc_proj) > 0 else "N/A"
         cells.append(p_pos)
         lines.append("| " + " | ".join(cells) + " |")
+
+    # Section 3b: Evidence Packages
+    if evidence_result is not None:
+        lines.append("\n## 3b. Evidence Packages (SYNTHETIC)\n")
+        lines.append("All data in this section is fabricated for demonstration. "
+                     "Replace with actual campus data before real decisions.\n")
+
+        ev = evidence_result["evidence"]
+
+        # Utility bill validation
+        lines.append("### Utility Bill Cross-Check\n")
+        bill_val = ev["bill_validation"]
+        lines.append("| Project | Claimed Benefit | Bill-Derived | Ratio | Flag |")
+        lines.append("|---------|----------------|-------------|-------|------|")
+        for _, r in bill_val.iterrows():
+            lines.append(f"| {r['project']} | {format_currency(r['claimed_annual_benefit'])} "
+                         f"| {format_currency(r['bill_derived_savings'])} "
+                         f"| {r['ratio_claimed_to_derived']:.2f} | {r['flag']} |")
+
+        # M&V calibration
+        cal = ev["calibrated_distribution"]
+        lines.append(f"\n### M&V Calibration (n={cal['n_projects']} peer projects)\n")
+        lines.append(f"- Actual/predicted ratio: median = {cal['mode']:.3f}, "
+                     f"mean = {cal['mean']:.3f}, std = {cal['std']:.3f}")
+        lines.append(f"- Calibrated MC savings triangular: "
+                     f"[{cal['low']:.3f}, {cal['mode']:.3f}, {cal['high']:.3f}]")
+        lines.append(f"- v2 used: {cfg['monte_carlo']['savings_triangular']}\n")
+
+        # Maintenance evidence
+        maint = ev["maintenance_analysis"]
+        lines.append("### Maintenance Record Analysis (10 years)\n")
+        lines.append(f"- Annual routine cost: {format_currency(maint['annual_routine_cost'])}")
+        lines.append(f"- Failures: {maint['total_failures']} in {maint['years_of_data']} years "
+                     f"(rate = {maint['failure_rate_per_year']:.2f}/yr)")
+        lines.append(f"- Avg failure cost: {format_currency(maint['avg_failure_cost'])}")
+        lines.append(f"- Evidence-based benefit: {format_currency(maint['total_evidence_based_benefit'])} "
+                     f"(vs config claim: {format_currency(maint['config_claimed_nonenergy_benefit'])} non-energy)\n")
+
+        # Submetered waste detection
+        sub = ev["submeter_analysis"]
+        lines.append("### Submetered Waste Detection (Gold Standard)\n")
+        lines.append(f"- Simultaneous H+C hours: {sub['simultaneous_hours']} / {sub['total_hours']} "
+                     f"({sub['simultaneous_pct']:.1f}%)")
+        lines.append(f"- Waste energy: {format_currency(sub['wasted_energy_kwh'])} kWh "
+                     f"({sub['waste_fraction']:.1%} of total)")
+        lines.append(f"- No model required — direct observation from submeters")
+        lines.append(f"- Comparison: whole-building model estimated "
+                     f"{baseline_eval[baseline_eval['model'] == 'change_point_regression']['estimated_waste_pct'].iloc[0]:.1%} "
+                     f"vs submeter measured {sub['waste_fraction']:.1%}\n")
+
+        # Risk tolerance
+        risk = evidence_result["risk"]
+        lines.append("### Risk Tolerance Assessment\n")
+        lines.append("| Project | ES10 | P(NPV>0) | Loss | Prob | Recommendation |")
+        lines.append("|---------|------|----------|------|------|----------------|")
+        for _, r in risk.iterrows():
+            lines.append(f"| {r['project']} | {format_currency(r['expected_shortfall_10'])} "
+                         f"| {r['P_NPV_positive']:.1%} "
+                         f"| {'PASS' if r['passes_loss_test'] else 'FAIL'} "
+                         f"| {'PASS' if r['passes_probability_test'] else 'FAIL'} "
+                         f"| **{r['recommendation']}** |")
+
+        # v2 vs v3 comparison
+        comp = evidence_result["comparison"]
+        lines.append("\n### v2 vs v3 (Evidence-Calibrated) Comparison\n")
+        lines.append("| Parameter | v2 Value | v3 (Evidence) | Source |")
+        lines.append("|-----------|----------|--------------|--------|")
+        for _, r in comp.iterrows():
+            lines.append(f"| {r['parameter']} | {r['v2_value']} | {r['v3_evidence_value']} | {r['source']} |")
+
+        # Decision rules
+        decisions = evidence_result.get("decisions")
+        if decisions is not None and len(decisions) > 0:
+            lines.append("\n### Decision Rules\n")
+            lines.append("| Project | Decision | Conditions | Evidence Gaps | Evidence Quality |")
+            lines.append("|---------|----------|-----------|---------------|-----------------|")
+            for _, r in decisions.iterrows():
+                lines.append(f"| {r['project']} | **{r['decision']}** "
+                             f"| {r['conditions']} | {r['evidence_gaps']} "
+                             f"| {r['evidence_quality']} |")
 
     # Section 4: Config dump
     lines.append("\n## 4. Configuration (config.yaml v2)\n")
@@ -640,8 +764,28 @@ def main() -> None:
     baseline_eval = step7_baseline(cfg)
     print(baseline_eval.to_string(index=False))
 
+    print("\n--- Evidence Generation & Calibration ---")
+    mc_stats = mc["stats"]
+    evidence_result = step_evidence(cfg, mc_stats)
+    ev = evidence_result["evidence"]
+    print(f"  Utility bills: {len(ev['utility_bills'])} rows")
+    print(f"  M&V peers: {len(ev['mv_data'])} projects")
+    cal = ev["calibrated_distribution"]
+    print(f"  Calibrated MC savings: [{cal['low']:.3f}, {cal['mode']:.3f}, {cal['high']:.3f}]")
+    maint = ev["maintenance_analysis"]
+    print(f"  Maintenance evidence benefit: {format_currency(maint['total_evidence_based_benefit'])}")
+    sub = ev["submeter_analysis"]
+    print(f"  Submeter waste: {sub['waste_fraction']:.1%} ({sub['simultaneous_hours']} hours)")
+    print(f"  Risk assessment:")
+    print(evidence_result["risk"][["project", "recommendation"]].to_string(index=False))
+    print(f"\n  v2 vs v3 comparison:")
+    print(evidence_result["comparison"].to_string(index=False))
+    print(f"\n  Decision rules:")
+    print(evidence_result["decisions"].to_string(index=False))
+
     print("\n--- Step 8: Generating Report ---")
-    report = generate_report(cfg, replication, sensitivity, mc, interact, opt, scr, baseline_eval)
+    report = generate_report(cfg, replication, sensitivity, mc, interact, opt, scr, baseline_eval,
+                             evidence_result=evidence_result)
     print(f"Report written to {OUT / 'report.md'}")
 
     # ---- V1 vs V2 comparison summary ----
@@ -675,14 +819,15 @@ def main() -> None:
               f"(v1: {'1.1%' if 'change' in row['model'] else '0.1%'})")
 
     print("\n" + "=" * 70)
-    print("UNVERIFIABLE ITEMS")
+    print("EVIDENCE STATUS")
     print("=" * 70)
-    print("1. Sub-scores were reverse-engineered (underdetermined system) — SYNTHETIC.")
-    print("2. Electrical avoided-failure parameters are based on assumed campus failure rate.")
-    print("3. Interaction magnitudes need field measurement — current values are conservative estimates.")
-    print("4. Monte Carlo distributions widened but still assumed — calibration needs real project data.")
-    print("5. Baseline waste model uses synthetic load — real building data needed for production.")
-    print("6. Friction rates (2% decay, 1.5% O&M, 2% escalation) are industry typical, not campus-specific.")
+    print("1. Utility bills: SYNTHETIC — replace with actual campus utility data.")
+    print("2. M&V data: SYNTHETIC — replace with real completed project outcomes.")
+    print("3. Maintenance records: SYNTHETIC — replace with actual CMMS export.")
+    print("4. Interaction analysis: SYNTHETIC — replace with calibrated energy model results.")
+    print("5. Submetered data: SYNTHETIC — install submeters for direct waste measurement.")
+    print("6. Risk tolerance thresholds: ARBITRARY — board/finance must set real thresholds.")
+    print("7. Decision rules derived from evidence, but thresholds need institutional calibration.")
 
 
 if __name__ == "__main__":
