@@ -62,6 +62,10 @@ from cmpm.evidence import (
     generate_decision_rules,
     risk_tolerance_assessment,
 )
+from cmpm.diagnostics import (
+    format_diagnostic_report,
+    run_all_diagnostics,
+)
 from cmpm.utils import format_currency, format_pct
 
 OUT = Path(__file__).resolve().parent / "outputs"
@@ -782,6 +786,36 @@ def main() -> None:
     print(evidence_result["comparison"].to_string(index=False))
     print(f"\n  Decision rules:")
     print(evidence_result["decisions"].to_string(index=False))
+
+    print("\n--- Diagnostics: Overfitting & Circularity Audit ---")
+    diag_results = run_all_diagnostics(cfg)
+    diag_report = format_diagnostic_report(diag_results, cfg)
+    (OUT / "diagnostics_report.md").write_text(diag_report)
+
+    gb_gap = diag_results["gradient_boosting"]["train_test_gap"]
+    print(f"  GB train/test: {gb_gap['train_rmse']} / {gb_gap['test_rmse']} "
+          f"(ratio={gb_gap['overfit_ratio']}) — {gb_gap['diagnosis']}")
+
+    cp_diag = diag_results["changepoint_regression"]
+    print(f"  CP residuals: lag-1 ACF={cp_diag['lag1_autocorrelation']}, "
+          f"DW={cp_diag['durbin_watson']} — {cp_diag['diagnosis']}")
+
+    mc_boot = diag_results["monte_carlo"]["bootstrap_stability_lab"]
+    print(f"  MC bootstrap (lab): P(NPV>0) std={mc_boot['P_NPV_positive']['std']:.4f} — "
+          f"{mc_boot['diagnosis']}")
+
+    ev_audit = diag_results["evidence_circularity"]
+    crit = ev_audit[ev_audit["severity"].isin(["CRITICAL", "HIGH"])]
+    print(f"  Evidence circularity: {len(crit)}/{len(ev_audit)} packages HIGH/CRITICAL")
+    print(f"  Mean circularity score: {ev_audit['circularity_score'].mean():.2f}")
+
+    diag_results["gradient_boosting"]["learning_curve"].to_csv(
+        OUT / "diag_gb_learning_curve.csv", index=False)
+    mc_sens = diag_results["monte_carlo"]["distribution_sensitivity_lab"]
+    mc_sens.to_csv(OUT / "diag_mc_sensitivity_lab.csv", index=False)
+    ev_audit.to_csv(OUT / "diag_evidence_circularity.csv", index=False)
+    diag_results["scoring_dirichlet"].to_csv(OUT / "diag_dirichlet_sensitivity.csv", index=False)
+    diag_results["interaction_sweep"].to_csv(OUT / "diag_interaction_sweep.csv", index=False)
 
     print("\n--- Step 8: Generating Report ---")
     report = generate_report(cfg, replication, sensitivity, mc, interact, opt, scr, baseline_eval,
