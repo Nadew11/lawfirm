@@ -76,6 +76,12 @@ from cmpm.scoring import (
 )
 from cmpm.diagnostics import format_diagnostic_report, run_all_diagnostics
 from cmpm.utils import format_currency, format_pct
+from cmpm.public_data import (
+    apply_public_data_to_config,
+    building_eui_comparison,
+    generate_public_data_report,
+    get_eia_rate,
+)
 
 OUT = Path(__file__).resolve().parent / "outputs"
 
@@ -315,6 +321,26 @@ def main() -> None:
     banner("CMPM VALIDATION HARNESS — REAL DATA MODE")
     real_data, avail = discover_data(cfg)
     print(avail.report())
+
+    # ── Apply public government data ──
+    section("Step 0: Government Data Integration")
+    cfg = apply_public_data_to_config(cfg)
+    pub_report = generate_public_data_report(cfg)
+    (OUT / "real_public_data_report.md").write_text(pub_report)
+
+    eui_comp = building_eui_comparison(cfg)
+    eui_comp.to_csv(OUT / "real_cbecs_eui_comparison.csv", index=False)
+
+    eia_rate = get_eia_rate("IL")
+    print(f"  EIA commercial rate (IL): ${eia_rate:.4f}/kWh")
+    print(f"  EIA escalation rate (IL 10yr CAGR): {cfg['frictions']['energy_escalation_rate']:.4%}/yr")
+    print(f"  IEEE campus failure rate: {cfg['electrical_project']['failure_probability']:.4f}/yr")
+    print(f"  DOE M&V savings distribution: {cfg['monte_carlo']['savings_triangular']}")
+    print(f"  CBECS EUI comparison:")
+    print(eui_comp[["project", "cbecs_type", "cbecs_eui_mean_kbtu", "cbecs_elec_eui_kwh_sf"]].to_string(index=False))
+
+    for change in cfg.get("_public_data_changes", []):
+        print(f"  CHANGED {change['parameter']}: {change['old']} -> {change['new']} ({change['source']})")
 
     fkw = base_friction_kwargs(cfg)
     rate = cfg["general"]["discount_rate"]
