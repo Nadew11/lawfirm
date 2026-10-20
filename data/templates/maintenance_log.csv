@@ -1,0 +1,13 @@
+date,event_type,system,description,cost,downtime_hours
+2024-01-15,routine_maintenance,electrical,Monthly switchgear inspection,2500.00,2
+2024-02-12,routine_maintenance,electrical,Panel thermography scan,3200.00,0
+2024-03-08,routine_maintenance,electrical,Breaker testing and cleaning,2800.00,4
+2024-04-22,major_failure,electrical,Transformer failure - Building A,185000.00,72
+2024-05-10,routine_maintenance,electrical,UPS battery replacement,4100.00,2
+2024-06-15,routine_maintenance,electrical,Annual relay calibration,3500.00,4
+2024-07-20,routine_maintenance,electrical,Generator load test,2200.00,2
+2024-08-05,routine_maintenance,electrical,Ground fault testing,2900.00,0
+2024-09-18,routine_maintenance,electrical,Arc flash study update,3800.00,0
+2024-10-12,routine_maintenance,electrical,Fall switchgear inspection,2600.00,2
+2024-11-08,routine_maintenance,electrical,Power quality monitoring review,1800.00,0
+2024-12-20,routine_maintenance,electrical,Year-end systems check,3100.00,4
