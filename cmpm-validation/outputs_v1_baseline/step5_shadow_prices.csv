@@ -1,0 +1,5 @@
+constraint,npv,cost,selected
+none,2218495.644543498,0.0,"central_plant, classroom_bas, dorm_occupancy, electrical_monitoring"
+dependency_only,2218495.644543498,0.0,"central_plant, classroom_bas, dorm_occupancy, electrical_monitoring"
+exclusion_only,2212071.1768067107,6424.467736787163,"central_plant, electrical_monitoring, lab_ventilation"
+both,2212071.1768067107,6424.467736787163,"central_plant, electrical_monitoring, lab_ventilation"

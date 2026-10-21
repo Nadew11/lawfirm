@@ -1,0 +1,4 @@
+pair,top5_overlap,top5_changed
+minmax vs zscore,5,0
+minmax vs rank,5,0
+zscore vs rank,5,0

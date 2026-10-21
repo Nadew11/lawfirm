@@ -1,0 +1,11 @@
+{
+  "eia_avg_price": "OK (253,341 bytes)",
+  "eia_retail_sales": "OK (239,257 bytes)",
+  "eia_aeo_prices": "HTTP 404",
+  "cbecs_2018_micro": "OK (54,891 bytes)",
+  "cbecs_2018_consumption": "OK (54,891 bytes)",
+  "estar_lookup": "OK (52,802 bytes)",
+  "estar_tech_ref": "OK (52,802 bytes)",
+  "doe_bbd_showcase": "Error: HTTPSConnectionPool(host='betterbuildingssolutioncenter.energy.gov', port=443): Max retries exceeded with url: /sites/default/files/attachments/Better_Buildings_Challenge_Dataset.xlsx (Caused by SSLError(SSLCertVerificationError(1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1000)')))",
+  "doe_bpd_summary": "HTTP 404"
+}

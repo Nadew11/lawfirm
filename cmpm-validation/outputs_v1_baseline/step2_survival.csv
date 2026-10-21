@@ -1,0 +1,11 @@
+project,scenario,npv,sign_flip
+lab_ventilation,base,633065.6003212379,False
+lab_ventilation,joint_downside,98530.23228040453,False
+central_plant,base,1117781.9085077578,False
+central_plant,joint_downside,-385884.7949805119,True
+classroom_bas,base,241414.89245595605,False
+classroom_bas,joint_downside,-20524.508178274882,True
+electrical_monitoring,base,808890.9542538789,False
+electrical_monitoring,joint_downside,132057.60250974406,False
+dorm_occupancy,base,166296.98475129303,False
+dorm_occupancy,joint_downside,-90314.13249675196,True

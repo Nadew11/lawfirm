@@ -1,0 +1,17 @@
+building,year,month,total_kwh,demand_kw,gas_therms,total_cost
+lab_ventilation,2024,1,78500,245,1200,12420.00
+lab_ventilation,2024,2,82100,260,1050,12852.00
+lab_ventilation,2024,3,79200,250,800,11904.00
+lab_ventilation,2024,4,76800,240,400,10752.00
+lab_ventilation,2024,5,80500,255,100,10465.00
+lab_ventilation,2024,6,95300,310,0,13742.00
+lab_ventilation,2024,7,105200,340,0,15780.00
+lab_ventilation,2024,8,102800,335,0,15420.00
+lab_ventilation,2024,9,92100,295,0,13815.00
+lab_ventilation,2024,10,79400,250,250,10822.00
+lab_ventilation,2024,11,77200,242,650,11580.00
+lab_ventilation,2024,12,80100,252,1100,12415.00
+central_plant,2024,1,350000,1100,5200,52500.00
+classroom_bas,2024,1,42000,135,600,6300.00
+electrical_monitoring,2024,1,55000,170,0,7150.00
+dorm_occupancy,2024,1,38000,120,800,5700.00

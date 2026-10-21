@@ -1,0 +1,6 @@
+,rank_1,rank_2,rank_3,rank_4,rank_5
+lab_ventilation,1.0,0.0,0.0,0.0,0.0
+central_plant,0.0,1.0,0.0,0.0,0.0
+classroom_bas,0.0,0.0,1.0,0.0,0.0
+electrical_monitoring,0.0,0.0,0.0,0.4854,0.5146
+dorm_occupancy,0.0,0.0,0.0,0.5146,0.4854
