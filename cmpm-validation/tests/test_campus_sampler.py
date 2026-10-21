@@ -176,8 +176,9 @@ class TestSampleCampus:
     def test_sample_all_projects(self):
         cfg = load_config()
         campus = sample_campus(cfg, seed=42)
-        assert len(campus.buildings) == 5
-        assert len(campus.provenance) == 5
+        n_projects = len(cfg["projects"])
+        assert len(campus.buildings) == n_projects
+        assert len(campus.provenance) == n_projects
         for key in cfg["projects"]:
             assert key in campus.buildings
 

@@ -29,10 +29,15 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "public"
 # Values in cents/kWh
 
 EIA_COMMERCIAL_RATES = {
-    "IL": {  # Illinois (Chicago campus)
+    "IL": {  # Illinois — Rock Island / Quad Cities campus
         2020: 9.15, 2019: 9.08, 2018: 9.12, 2017: 9.09, 2016: 9.02,
         2015: 9.02, 2014: 9.26, 2013: 8.14, 2012: 7.99, 2011: 8.64,
         2010: 8.88,
+    },
+    "MA": {  # Massachusetts — Boston presentation market
+        2020: 16.03, 2019: 16.80, 2018: 17.17, 2017: 15.94, 2016: 15.60,
+        2015: 15.36, 2014: 15.75, 2013: 14.91, 2012: 14.17, 2011: 14.39,
+        2010: 14.64,
     },
     "US": {  # National average
         2020: 10.59, 2019: 10.68, 2018: 10.67, 2017: 10.66, 2016: 10.43,
@@ -515,6 +520,7 @@ def building_eui_comparison(cfg: dict[str, Any]) -> pd.DataFrame:
         "classroom_bas": "classroom",
         "electrical_monitoring": "college_university",
         "dorm_occupancy": "dormitory",
+        "steam_tunnel_insulation": "college_university",
     }
 
     rows = []
@@ -531,6 +537,116 @@ def building_eui_comparison(cfg: dict[str, Any]) -> pd.DataFrame:
             "cbecs_elec_eui_kwh_sf": elec.get("mean", 0),
             "cbecs_sample_n": cbecs.get("n", 0),
             "annual_benefit_claimed": p.get("annual_benefit", 0),
+        })
+
+    return pd.DataFrame(rows)
+
+
+# =========================================================================
+# Rate normalization: IL → MA (Boston presentation market)
+# =========================================================================
+
+def rate_normalization_table(
+    cfg: dict[str, Any],
+    target_state: str = "MA",
+) -> pd.DataFrame:
+    """Rescale all dollar-denominated project outputs to a target state's rate.
+
+    Source: EIA Form 861 commercial rates.
+    IL: $0.0915/kWh, MA: $0.1603/kWh → 1.752x multiplier.
+    """
+    il_rate = get_eia_rate("IL")
+    target_rate = get_eia_rate(target_state)
+    multiplier = target_rate / il_rate
+
+    rate = cfg["general"]["discount_rate"]
+    life = cfg["general"]["analysis_life_years"]
+
+    rows = []
+    for pk, pdata in cfg["projects"].items():
+        from cmpm.economics import compute_npv
+        npv_il = compute_npv(
+            pdata["capex"], pdata["annual_benefit"], rate, life, cross_check=False
+        )
+        benefit_target = pdata["annual_benefit"] * multiplier
+        npv_target = compute_npv(
+            pdata["capex"], benefit_target, rate, life, cross_check=False
+        )
+        rows.append({
+            "project": pk,
+            "annual_benefit_IL": pdata["annual_benefit"],
+            "annual_benefit_target": round(benefit_target),
+            "npv_IL": round(npv_il),
+            "npv_target": round(npv_target),
+            "npv_change_pct": round((npv_target / npv_il - 1) * 100, 1) if npv_il != 0 else 0,
+            "il_rate": il_rate,
+            "target_rate": target_rate,
+            "multiplier": round(multiplier, 3),
+            "target_state": target_state,
+        })
+
+    return pd.DataFrame(rows)
+
+
+# =========================================================================
+# Financing structures analysis
+# =========================================================================
+
+def financing_analysis(cfg: dict[str, Any]) -> pd.DataFrame:
+    """Analyze project economics under different financing structures.
+
+    Structures: direct purchase, EPC (guaranteed savings), utility incentive,
+    green bond financing, and combined (EPC + incentive + bond).
+    """
+    rate = cfg["general"]["discount_rate"]
+    life = cfg["general"]["analysis_life_years"]
+    fin_cfg = cfg.get("financing", {})
+    epc = fin_cfg.get("energy_performance_contract", {})
+    incent = fin_cfg.get("utility_incentives", {})
+    bond = fin_cfg.get("green_bonds", {})
+
+    from cmpm.economics import compute_npv
+
+    rows = []
+    for pk, pdata in cfg["projects"].items():
+        capex = pdata["capex"]
+        benefit = pdata["annual_benefit"]
+
+        npv_direct = compute_npv(capex, benefit, rate, life, cross_check=False)
+
+        epc_margin = epc.get("schneider_margin_pct", 0.12)
+        epc_benefit = benefit * (1 - epc_margin)
+        npv_epc = compute_npv(capex, epc_benefit, rate, life, cross_check=False)
+        epc_guarantee = benefit * epc.get("guarantee_pct", 0.85)
+
+        incentive_rate = incent.get("controls_per_kwh_saved", 0.03)
+        incentive_max = incent.get("max_pct_of_project_cost", 0.50)
+        est_kwh_saved = benefit / get_eia_rate("IL")
+        incentive_amt = min(est_kwh_saved * incentive_rate, capex * incentive_max)
+        npv_incentive = compute_npv(
+            capex - incentive_amt, benefit, rate, life, cross_check=False
+        )
+
+        bond_rate = bond.get("coupon_rate", 0.035)
+        npv_bond = compute_npv(capex, benefit, bond_rate, life, cross_check=False)
+
+        net_capex = capex - incentive_amt
+        npv_combined = compute_npv(net_capex, epc_benefit, bond_rate, life, cross_check=False)
+
+        rows.append({
+            "project": pk,
+            "capex": capex,
+            "annual_benefit": benefit,
+            "npv_direct_purchase": round(npv_direct),
+            "npv_epc_guaranteed": round(npv_epc),
+            "epc_annual_guarantee": round(epc_guarantee),
+            "utility_incentive": round(incentive_amt),
+            "npv_with_incentive": round(npv_incentive),
+            "npv_green_bond_rate": round(npv_bond),
+            "npv_combined_best": round(npv_combined),
+            "best_vs_direct_pct": round(
+                (npv_combined / npv_direct - 1) * 100, 1
+            ) if npv_direct != 0 else 0,
         })
 
     return pd.DataFrame(rows)

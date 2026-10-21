@@ -68,9 +68,15 @@ def _validate_columns(df: pd.DataFrame, required: set[str], name: str) -> None:
 # =========================================================================
 
 def load_weather(path: Path | None = None) -> pd.DataFrame | None:
-    """Load hourly weather data. Returns None if unavailable."""
+    """Load hourly weather data. Returns None if unavailable.
+
+    Prefers Quad City airport (KMLI) data for Rock Island campus.
+    Falls back to Chicago O'Hare if Quad City data unavailable.
+    """
     if path is None:
-        path = WEATHER_DIR / "hourly_weather.csv"
+        quad_city = WEATHER_DIR / "quad_city_hourly.csv"
+        chicago = WEATHER_DIR / "hourly_weather.csv"
+        path = quad_city if quad_city.exists() else chicago
     if not path.exists():
         return None
     df = pd.read_csv(path)

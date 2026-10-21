@@ -61,9 +61,10 @@ class TestAdjustedBenefit:
 
 
 class TestSubsetEnumeration:
-    def test_32_subsets(self, cfg):
+    def test_all_subsets(self, cfg):
         df = enumerate_all_subsets(cfg)
-        assert len(df) == 31  # 2^5 - 1 (excluding empty set)
+        n = len(cfg["projects"])
+        assert len(df) == (2 ** n) - 1  # all non-empty subsets
 
     def test_overstatement_nonneg(self, cfg):
         df = enumerate_all_subsets(cfg)

@@ -163,7 +163,7 @@ class TestBuildingEUIComparison:
     def test_produces_dataframe(self, cfg):
         df = building_eui_comparison(cfg)
         assert isinstance(df, pd.DataFrame)
-        assert len(df) == 5
+        assert len(df) == len(cfg["projects"])
         assert "cbecs_eui_mean_kbtu" in df.columns
 
     def test_lab_maps_to_laboratory(self, cfg):
@@ -181,3 +181,33 @@ class TestReport:
         assert "CBECS" in report
         assert "IEEE" in report
         assert "DOE" in report
+
+
+class TestRateNormalization:
+    def test_ma_rate_higher_than_il(self):
+        from cmpm.public_data import get_eia_rate
+        il = get_eia_rate("IL")
+        ma = get_eia_rate("MA")
+        assert ma > il * 1.5  # MA should be at least 50% higher
+
+    def test_normalization_table(self, cfg):
+        from cmpm.public_data import rate_normalization_table
+        df = rate_normalization_table(cfg, "MA")
+        assert len(df) == len(cfg["projects"])
+        assert all(df["multiplier"] > 1.5)
+        assert all(df["npv_target"] > df["npv_IL"])
+
+
+class TestFinancingAnalysis:
+    def test_produces_dataframe(self, cfg):
+        from cmpm.public_data import financing_analysis
+        df = financing_analysis(cfg)
+        assert len(df) == len(cfg["projects"])
+        assert "npv_direct_purchase" in df.columns
+        assert "npv_epc_guaranteed" in df.columns
+        assert "npv_combined_best" in df.columns
+
+    def test_incentive_reduces_effective_capex(self, cfg):
+        from cmpm.public_data import financing_analysis
+        df = financing_analysis(cfg)
+        assert all(df["npv_with_incentive"] >= df["npv_direct_purchase"])

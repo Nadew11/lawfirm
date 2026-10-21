@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""CMPM Validation Harness — Run with SAMPLED campus data.
+"""CMPM — Schneider Electric Pre-Sale Campus Diagnostic
 
-When real campus data is unavailable, this runner samples realistic building
-profiles from the Chicago Energy Benchmarking dataset (28,000+ real buildings)
-and uses them as inputs. This is NOT synthetic/arbitrary data — it's real
-energy data from real Chicago buildings matched to each project type.
+This is the tool Schneider walks in with before asking for a dollar.
+It produces a campus-specific prioritization that demonstrates analytical
+depth competitors cannot replicate. The output IS the recommendation
+for Q1, and the existence of the tool IS the answer to Q3.
+
+When real campus data is unavailable, the runner samples realistic building
+profiles from the Chicago Energy Benchmarking dataset (28,000+ real buildings).
 
 Data source hierarchy:
   1. Real campus data (data/real/) — used if available
@@ -88,8 +91,10 @@ from cmpm.utils import format_currency, format_pct
 from cmpm.public_data import (
     apply_public_data_to_config,
     building_eui_comparison,
+    financing_analysis,
     generate_public_data_report,
     get_eia_rate,
+    rate_normalization_table,
 )
 
 OUT = Path(__file__).resolve().parent / "outputs"
@@ -180,7 +185,11 @@ def main() -> None:
         run_compare(cfg, args.seed)
         return
 
-    banner("CMPM VALIDATION HARNESS — SAMPLED CAMPUS MODE")
+    banner("SCHNEIDER ELECTRIC — CAMPUS MODERNIZATION PRIORITIZATION MODEL")
+    print("Pre-sale diagnostic tool: the analysis Schneider walks in with.")
+    print(f"Campus: {cfg.get('client', {}).get('campus_location', 'Rock Island, IL')}")
+    print(f"Weather: {cfg.get('client', {}).get('weather_station', 'KMLI')}")
+    print(f"Platform: {cfg.get('client', {}).get('platform', 'EcoStruxure')}")
 
     # ── Step 0a: Sample campus buildings from Chicago benchmarking ──
     section("Step 0a: Sample Campus from Chicago Energy Benchmarking")
@@ -381,6 +390,44 @@ def main() -> None:
     cp_diag = diag_results["changepoint_regression"]
     print(f"  CP lag-1 ACF: {cp_diag['lag1_autocorrelation']:.3f} — {cp_diag['diagnosis']}")
 
+    # ── Rate normalization: IL → MA (Boston presentation) ──
+    section("Rate Normalization: IL → MA (Boston presentation market)")
+    norm_df = rate_normalization_table(cfg, "MA")
+    norm_df.to_csv(OUT / "sampled_rate_normalization_ma.csv", index=False)
+    il_rate = get_eia_rate("IL")
+    ma_rate = get_eia_rate("MA")
+    print(f"  IL rate: ${il_rate:.4f}/kWh (EIA)")
+    print(f"  MA rate: ${ma_rate:.4f}/kWh (EIA) — {ma_rate/il_rate:.1f}x higher")
+    print(f"\n  NPV at Massachusetts rates:")
+    for _, r in norm_df.iterrows():
+        print(f"    {r['project']}: ${r['npv_IL']:>10,.0f} (IL) → ${r['npv_target']:>10,.0f} (MA)  [{r['npv_change_pct']:+.0f}%]")
+
+    # ── Financing structures ──
+    section("Financing Structures Analysis")
+    fin_df = financing_analysis(cfg)
+    fin_df.to_csv(OUT / "sampled_financing_analysis.csv", index=False)
+    print("  NPV under different financing structures:")
+    for _, r in fin_df.iterrows():
+        print(f"    {r['project']}: direct=${r['npv_direct_purchase']:>9,.0f}  "
+              f"EPC=${r['npv_epc_guaranteed']:>9,.0f}  "
+              f"incentive=${r['npv_with_incentive']:>9,.0f}  "
+              f"combined=${r['npv_combined_best']:>9,.0f}")
+
+    # ── Rejection story ──
+    if "steam_tunnel_insulation" in cfg["projects"]:
+        section("MODEL REJECTION: Steam Tunnel Insulation")
+        steam = cfg["projects"]["steam_tunnel_insulation"]
+        steam_npv = compute_npv(steam["capex"], steam["annual_benefit"], rate, life, cross_check=False)
+        steam_pb = compute_simple_payback(steam["capex"], steam["annual_benefit"])
+        steam_be = breakeven_benefit(steam["capex"], rate, life)
+        print(f"  Capex:           ${steam['capex']:>10,.0f}")
+        print(f"  Annual benefit:  ${steam['annual_benefit']:>10,.0f}")
+        print(f"  NPV:             ${steam_npv:>10,.0f}  {'← NEGATIVE' if steam_npv < 0 else ''}")
+        print(f"  Simple payback:  {steam_pb:>10.1f} years  {'← exceeds analysis window' if steam_pb > life else ''}")
+        print(f"  Breakeven need:  ${steam_be:>10,.0f}/yr  (actual: ${steam['annual_benefit']:,.0f})")
+        print(f"\n  DECISION: REJECT")
+        print(f"  {steam.get('rejection_rationale', 'NPV negative, payback exceeds analysis window')}")
+
     # ── Provenance summary ──
     section("Data Provenance Summary")
     provenance_lines = [
@@ -408,7 +455,8 @@ def main() -> None:
         f"- M&V savings: {cfg['monte_carlo']['savings_triangular']} (DOE ESPC calibrated)",
         "",
         "## Weather",
-        f"- {'REAL: NOAA ISD Chicago OHare 2024-2025' if avail.weather else 'SYNTHETIC'}",
+        f"- {'REAL: NOAA ISD Quad City Airport (KMLI) 2024-2025' if avail.weather else 'SYNTHETIC'}",
+        f"- Station: 725440-14923 (Rock Island, IL metro — 165 miles from Chicago)",
         "",
         "## Evidence",
         "- Utility bills: SYNTHETIC (model-generated)",
@@ -426,22 +474,37 @@ def main() -> None:
     (OUT / "sampled_data_provenance.md").write_text(provenance_text)
 
     # ── Final summary ──
-    banner("FINAL SUMMARY — SAMPLED CAMPUS MODE")
+    banner("SCHNEIDER ELECTRIC — CMPM DIAGNOSTIC SUMMARY")
+    print("This is the tool Schneider walks in with before asking for a dollar.")
+    print("Competitors sell a platform. Schneider arrives with the analysis done.\n")
 
-    print("\nSampled buildings:")
+    print("Sampled buildings:")
     for key, bldg in campus.buildings.items():
+        product = cfg["projects"].get(key, {}).get("schneider_product", "—")
         print(f"  {key}: {bldg.source_building_name} ({bldg.building_type}, "
-              f"{bldg.area_sqft:,.0f} sqft, EUI={bldg.site_eui_kbtu:.1f})")
+              f"{bldg.area_sqft:,.0f} sqft) → {product}")
 
-    print(f"\nWeather: {'REAL (NOAA ISD)' if avail.weather else 'SYNTHETIC'}")
-    print(f"Electricity rate: ${eia_rate:.4f}/kWh (EIA)")
+    weather_station = cfg.get("client", {}).get("weather_station", "KMLI")
+    print(f"\nWeather: {'REAL (NOAA ISD ' + weather_station + ')' if avail.weather else 'SYNTHETIC'}")
+    print(f"Electricity rate: ${eia_rate:.4f}/kWh (EIA IL) | ${get_eia_rate('MA'):.4f}/kWh (EIA MA)")
 
     print("\nProject rankings:")
     print(rank_df[["project", "score_rank", "composite_score"]].to_string(index=False))
 
     print("\nDecision recommendations:")
+    approved = 0
+    rejected = 0
     for _, r in decisions.iterrows():
-        print(f"  {r['project']}: {r['decision']} ({r['evidence_quality']})")
+        status = r['decision']
+        if 'REJECT' in str(status).upper() or 'DEFER' in str(status).upper():
+            rejected += 1
+        else:
+            approved += 1
+        print(f"  {r['project']}: {status} ({r['evidence_quality']})")
+
+    print(f"\n  APPROVED/CONDITIONS: {approved} | DEFERRED/REJECTED: {rejected}")
+    if rejected > 0:
+        print("  ↑ The model has teeth — it rejects uneconomic projects, not just ranks.")
 
     print(f"\nAll outputs written to {OUT}/")
     print("Files prefixed with 'sampled_' to distinguish from other runs.")

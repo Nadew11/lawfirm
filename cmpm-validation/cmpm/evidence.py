@@ -82,6 +82,14 @@ def generate_utility_bills(cfg: dict[str, Any], seed: int | None = None) -> pd.D
             "eui_kwh_per_sf": 18,
             "addressable_pct": 0.06,
         },
+        "steam_tunnel_insulation": {
+            "base_monthly_kwh": 120_000,
+            "seasonal_amplitude": 60_000,
+            "noise_std": 10_000,
+            "floor_area_sf": 15_000,
+            "eui_kwh_per_sf": 45,
+            "addressable_pct": 0.02,
+        },
     }
 
     rows = []

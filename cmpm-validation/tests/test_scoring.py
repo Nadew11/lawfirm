@@ -88,7 +88,7 @@ class TestCorrelationDoubleCounting:
     def test_vif_summary(self, cfg):
         result = correlation_double_counting(cfg)
         vif_df = result["vif_summary"]
-        assert len(vif_df) == 5
+        assert len(vif_df) == len(cfg["score_weights"])
         assert (vif_df["VIF"] >= 1.0).all()
 
     def test_effective_weights_sum_to_1(self, cfg):
@@ -100,7 +100,7 @@ class TestCorrelationDoubleCounting:
 class TestRankDisagreement:
     def test_produces_rankings(self, cfg):
         df = rank_disagreement(cfg)
-        assert len(df) == 5
+        assert len(df) == len(cfg["projects"])
         assert "score_rank" in df.columns
         assert "pi_rank" in df.columns
 

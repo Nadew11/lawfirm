@@ -37,6 +37,7 @@ PROJECT_TYPE_MAP = {
     "classroom_bas": "College/University",
     "electrical_monitoring": "College/University",
     "dorm_occupancy": "Residence Hall/Dormitory",
+    "steam_tunnel_insulation": "College/University",
 }
 
 

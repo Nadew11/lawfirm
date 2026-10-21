@@ -34,7 +34,8 @@ def seed(cfg):
 class TestUtilityBills:
     def test_shape(self, cfg, seed):
         df = generate_utility_bills(cfg, seed)
-        assert len(df) == 5 * 24  # 5 buildings x 24 months
+        n_buildings = len([k for k in cfg["projects"] if k in df["building"].unique()])
+        assert len(df) == n_buildings * 24
 
     def test_columns(self, cfg, seed):
         df = generate_utility_bills(cfg, seed)

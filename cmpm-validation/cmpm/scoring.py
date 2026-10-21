@@ -1,4 +1,19 @@
-"""Scoring validity: weight stability, normalization sensitivity, rank disagreement."""
+"""Scoring validity: four precise bias checks on the ranking system.
+
+Bias types tested (not vague — each is defined and measured):
+  1. WEIGHTING BIAS — Dirichlet perturbation: do rankings flip with small
+     weight changes? Measured by P(rank unchanged) across 10K random weight
+     vectors drawn from Dirichlet(alpha * concentration).
+  2. SCALE BIAS — Normalization sensitivity: do rankings depend on the
+     normalization method (min-max vs z-score vs rank)? If top-5 changes,
+     the scoring is scale-biased.
+  3. DOUBLE-COUNTING BIAS — VIF analysis: do correlated sub-scores inflate
+     one criterion's effective weight beyond its nominal weight? VIF > 5
+     means severe multicollinearity.
+  4. RANK VALIDITY — Kendall tau: does the composite score agree with
+     pure financial metrics (NPV, PI)? Strong disagreement may be intentional
+     (non-financial priorities) but must be justified.
+"""
 from __future__ import annotations
 
 from typing import Any
